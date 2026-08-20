@@ -67,7 +67,7 @@ type secrets struct {
 ## Config page — `src/pages/ConfigPage.tsx`
 
 Admin-only React page. Fields:
-- **Bedrock**: region, model id, max tool iterations, optional system prompt.
+- **Bedrock**: region, model id, max tool iterations, optional system prompt (empty → `agent.DefaultSystemPrompt` from `pkg/agent/system_prompt.go`, which enables act-on-the-live-UI behavior; an operator-set prompt fully replaces it).
 - **AWS credentials** (optional): access key id, secret access key — via `SecretInput` (shows "configured" once set).
 - **MCP servers**: repeatable rows `{ name, url, authHeader }` + a secret `Auth value` per row stored as `mcpSecret_<name>`.
 

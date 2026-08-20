@@ -5,9 +5,10 @@
 A Grafana **app plugin** (`type: app`, id `mcpagent-app`) that adds an AI chat agent to Grafana. The agent:
 
 1. Reads the current Grafana page context (dashboard/panel/alert/time range) in the browser.
-2. Prefills a suggested question into a chat box.
+2. Offers a context-derived suggested question as a tappable chip (input is never pre-seeded).
 3. On send, streams the turn to the plugin's **Go backend**, which runs an agent loop on **AWS Bedrock** (ConverseStream API, token streaming).
 4. The loop calls tools exposed by one or more **HTTP MCP servers** the operator configured, and streams reasoning/tool-calls/answer back to the browser as Server-Sent Events.
+5. The loop can also **act on the live page** via frontend-executed browser tools (time range, variables, Explore, live panel-query edits) using a pause/continue protocol — see [11](./11-browser-tools.md).
 
 It is deliberately generic: it has **no knowledge of any specific MCP backend**. Point it at any HTTP MCP endpoint(s).
 
@@ -83,7 +84,9 @@ User types / accepts prefill in ChatPanel
 | Docked panel (pushes page, not overlay) | ✅ built | `FloatingChat.tsx` shrinks `.grafana-app`; page stays interactive |
 | Top-bar trigger next to Sign in | ✅ built (DOM-injected) | extension slots are allow-listed, so injected via MutationObserver; FAB fallback |
 | Chat history (localStorage) | ✅ built | `chat-store.ts`; session list + resume + delete |
-| Page-context prefill | ✅ built (best-effort) | async; URL + `getTemplateSrv` + dashboard API; see [06](./06-page-context.md) |
+| Page-context extraction + suggestion chip | ✅ built (best-effort) | async; mount retry + URL-change re-extract; chip, never pre-seeded input; see [06](./06-page-context.md) |
+| Browser tools (live UI agency) | ✅ built + verified | pause/continue loop, Tier 1 URL-state + Tier 2 scene mutation, `ask_user`; see [11](./11-browser-tools.md) |
+| Confirmation gate for mutating tools | ✅ built | Allow / Always allow / Deny chips; `update_panel_query` gated |
 | SSE token streaming (typewriter) | ✅ built + verified | `ConverseStream` deltas ↔ `chat-stream.ts`; blinking caret while streaming |
 | MCP HTTP client | ✅ built | `mcp/client.go`; HTTP + SSE responses |
 | Bedrock ConverseStream agent loop | ✅ built | `agent/agent.go` |
@@ -93,7 +96,7 @@ User types / accepts prefill in ChatPanel
 | Go backend build | ✅ working | `go build ./pkg`; SDK pinned v0.251.0 |
 | Local run (docker-compose + unsigned) | ✅ verified | Grafana 13.2; requires `GF_PLUGINS_FORWARD_HOST_ENV_VARS` for AWS creds |
 | Mock datasource / dashboard | ✅ in repo | `provisioning/`; mock MCP still external |
-| `list_tools` / tool-permission UI | ❌ not built | backend caps tool count + result size, but does not gate mutating tools |
+| `list_tools` / tool-permission UI | ⚠️ partial | browser mutating tools are confirm-gated; MCP tools are not gated (caps only) |
 | Reasoning stream (`reasoning` events) | ⚠️ partial | type exists; backend does not emit separate reasoning (ConverseStream text only) |
 | Signing / distribution | ❌ not done | dev runs unsigned via env allowlist |
 

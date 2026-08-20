@@ -42,13 +42,15 @@ Grafana exposes these at `/api/plugins/mcpagent-app/resources/<path>`.
 
 ### `handleChat` (SSE)
 
-1. Requires `POST`; decodes `chatRequest` `{ sessionId, message, history[], pageContext }`.
-2. Rejects empty `message` with 400.
+1. Requires `POST`; decodes `chatRequest` `{ sessionId, message, history[], pageContext, browserTools[], continuation, toolResults[] }`.
+2. Rejects the request with 400 only when **both** `message` and `continuation` are empty.
 3. Requires the `http.ResponseWriter` to implement `http.Flusher`.
 4. Sets SSE headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`; writes 200 and flushes.
 5. `emit` closure: `fmt.Fprintf(w, "data: %s\n\n", json(ev))` + `flusher.Flush()` per `agent.Event`.
-6. `message = enrichWithContext(req.Message, req.PageContext)`.
-7. `a.newAgent().Run(r.Context(), message, req.History, emit)`.
+6. **Continuation branch**: when `continuation` is set, builds a post-action context text (`"[Grafana page context observed after the browser actions]" + contextBody(pageContext)`) and calls `a.newAgent().Continue(ctx, continuation, toolResults, browserTools, contextText, emit)` — `message`/`history` are ignored. See [11-browser-tools.md](./11-browser-tools.md).
+7. Otherwise: `message = enrichWithContext(req.Message, req.PageContext)` then `a.newAgent().Run(r.Context(), message, req.History, req.BrowserTools, emit)`.
+
+The default system prompt (`agent.DefaultSystemPrompt`, `pkg/agent/system_prompt.go`) applies when `Settings.SystemPrompt` is empty (`newAgent`).
 
 `enrichWithContext` builds a preamble:
 

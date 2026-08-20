@@ -125,15 +125,22 @@ the chat from the **MCP Agent** button in the top bar (or the floating button
 fallback). The chat is a **docked panel** that pushes the page content aside so
 you can keep editing panels/queries while chatting.
 
-## Provisioned datasource (for page-context testing)
+## Provisioned datasources (for page-context + browser-tool testing)
 
-`provisioning/` is mounted into the container and is part of the repo. The dev
-setup provisions Grafana's built-in **TestData** datasource plus a sample
-dashboard so page-context prefill has real content to read:
+`provisioning/` is mounted into the container and is part of the repo:
 
-- `provisioning/datasources/mock.yaml` — TestData datasource.
+- `provisioning/datasources/mock.yaml` — **TestData** datasources
+  (`mock-metrics`, `mock-logs`) plus **Local Prometheus** (`local-prom`),
+  a real Prometheus from the compose stack (service `prometheus`, host port
+  9091) that self-scrapes and scrapes Grafana — real metrics with zero seeding.
+- `provisioning/prometheus/prometheus.yml` — its scrape config.
 - `provisioning/dashboards/dashboards.yaml` + `provisioning/dashboards-json/` —
-  sample dashboard(s) loaded on startup.
+  sample dashboard(s) loaded on startup. `checkout.json` has two TestData
+  panels (ids 1–2) and one **real PromQL panel** (id 3,
+  `sum(rate(prometheus_http_requests_total[1m]))`) so live query-edit tools
+  (`update_panel_query`, `open_explore`) have a genuine query language to act
+  on. TestData panels have **no query language** — the agent will (correctly)
+  refuse to "aggregate" them.
 
 ## Mock MCP server (for agent-loop testing)
 

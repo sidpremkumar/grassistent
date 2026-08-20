@@ -55,8 +55,15 @@ The reusable chat surface. Responsibilities:
   mode) a close button via the optional `onClose` prop. Titles auto-derive from
   the first user message. The active conversation is persisted to localStorage
   whenever messages settle.
-- On mount / new chat: `await extractPageContext()` -> state; `buildPrefill(ctx)`
-  seeds the input.
+- On mount: `extractPageContext()` with a 3×700ms retry (Scenes hydrates async),
+  re-extracted on every URL change (`locationService.getHistory().listen`).
+  `buildPrefill(ctx)` feeds a tappable **suggestion chip** above the composer —
+  the input is never pre-seeded; tapping the chip fills it.
+- **Interaction chips**: when a browser tool needs the human (`ask_user`
+  question options, or the Allow / Always allow / Deny confirmation gate for
+  mutating tools), `useAgentChat.interaction` renders as an inline card above
+  the composer (`styles.interaction`); answers resume the paused agent loop.
+  See [11](./11-browser-tools.md).
 - Renders the **context disclosure** (`ContextDisclosure`), message list, and
   input row.
 - **Context disclosure** ("what the agent can see"): a collapsible header at the

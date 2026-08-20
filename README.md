@@ -47,6 +47,20 @@ Detailed docs live in [`docs/`](./docs/README.md). They are written primarily fo
 
 The model runs server-side, so **no API keys or MCP secrets are ever exposed to the browser**. The frontend only talks to the plugin's same-origin resource route (`/api/plugins/mcpagent-app/resources/chat`), authenticated by the user's Grafana session.
 
+## Examples
+
+**Editing a panel query in place (with confirmation).** While viewing a panel editor for *Checkout API*, the agent already knows the current query and the panel you're on. Ask it to change the query and it edits it live:
+
+> **You:** Update to sum every 5 mins instead
+
+The agent reads the current expression from page context (`sum(rate(prometheus_http_requests_total[1m]))`), opens the panel editor, and proposes the edit to `sum(rate(prometheus_http_requests_total[5m]))`. Because editing a panel query mutates the page, it hands you an inline **Allow / Always allow / Deny** confirmation before applying:
+
+![Agent proposing a panel-query edit with an inline Allow/Deny confirmation](./docs/assets/before-suggestion.png)
+
+Once you allow it, the query is rewritten to `[5m]`, the panel preview updates automatically, and you click **Apply** to save. Below the chat, the agent also surfaces a context-aware suggested next action — e.g. *"Investigate what's happening on 'Checkout API' for the current time range and explain any anomalies."*
+
+![Panel query updated to 5m with a suggested follow-up action chip](./docs/assets/after-suggestion.png)
+
 ## Configuration
 
 Open the plugin's **Configuration** page (admin) to set:

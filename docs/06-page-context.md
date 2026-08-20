@@ -1,4 +1,4 @@
-# 06 — Page context & prefill
+# 06 — Page context & suggestion
 
 `src/lib/page-context.ts`. Browser-side extraction of what the user is viewing, plus a suggested question. Backend enrichment happens separately (see [03](./03-backend.md) `enrichWithContext`).
 
@@ -27,6 +27,12 @@ Uses officially-exposed runtime APIs plus URL parsing:
   panels, per-panel queries, and datasource** — the reliable way on Grafana 13
   Scenes dashboards (where `window.__grafanaSceneContext` isn't consistently
   exposed). Falls back to `{ dashboardUid }` on any error.
+  - Panel titles include the **numeric panel id** (`p99 latency (id 1)`) and
+    query summaries are prefixed `[<title> id=<id>]` — browser tools
+    (`update_panel_query`, `open_panel_editor`) address panels by id.
+  - Datasource renders as **`uid (type)`** (e.g. `mock-metrics
+    (grafana-testdata-datasource)`) via `describeDatasource`, so the agent can
+    recognize synthetic/testdata sources before acting.
 - **Explore** (`readExplore`): decodes the `panes` URL param (schemaVersion ≥ 1)
   to surface the first pane's datasource, time range, and actual queries.
 - **Time range**: Explore range, else `from`/`to` query params.
@@ -42,19 +48,31 @@ Uses officially-exposed runtime APIs plus URL parsing:
 `Currently viewing dashboard "Checkout API", datasource prod-prom, time range now-1h → now, 3 queries, variables: service.`
 followed by a rendered list of the queries.
 
-Callers must `await` (or `.then()`) it — `ChatPanel` does so on mount and on new
-chat. The result is shown in the **context disclosure** at the top of the panel
+Callers must `await` (or `.then()`) it. `ChatPanel` extracts on mount **with a
+short retry loop** (3 × 700ms — Scenes dashboards hydrate async, so the first
+extraction after login/navigation often sees nothing; `hasPageContext(ctx)`
+decides whether to retry) and **re-extracts on every URL change** via
+`locationService.getHistory().listen`, so the panel tracks the page being
+viewed without a reload. It is also re-extracted after every browser tool
+round (see [11](./11-browser-tools.md)) so the model observes its own actions.
+The result is shown in the **context disclosure** at the top of the panel
 (`ContextDisclosure` in `ChatPanel.tsx`): when context exists it summarizes it
 (dashboard, datasource, time range, queries) behind an expandable header; when
 nothing is detected it explicitly reads `Agent has no page context` so the empty
 case is visible rather than silent.
 
-## `buildPrefill(ctx): string`
+## `buildPrefill(ctx): string` → suggestion chip
 
 - If `dashboardTitle`: `Investigate what's happening on "<title>" for the current time range and explain any anomalies.`
 - Else if `queries` present: `Explain what my current Explore query is doing and how to improve it ...`
 - Else if `summary`: `<summary> What should I look into?`
-- Else: `''` (empty; user types freely).
+- Else: `''` (no suggestion shown).
+
+The result is **not pre-filled into the input**. It renders as a tappable
+dashed **suggestion chip** above the composer (`styles.suggestion`,
+`data-testid="mcpagent-suggestion"`); tapping fills the input. The chip hides
+while the user has typed anything, while `busy`, and while an interaction
+(confirm / ask_user) is pending, and refreshes on navigation / new chat.
 
 ## How it reaches the model
 

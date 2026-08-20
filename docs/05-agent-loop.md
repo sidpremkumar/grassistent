@@ -30,24 +30,38 @@ New(brc *bedrockruntime.Client, modelID, systemPrompt string,
     maxIterations, maxTools int, clients []*mcp.Client) *Agent
 ```
 
-### `collectTools(ctx)`
+### `collectTools(ctx, browserTools)`
 For each MCP client: `Initialize` + `ListTools`. Each tool becomes a Bedrock `ToolSpecification`:
 - `Name = "<server>__<tool>"`
 - `Description = tool.Description` (falls back to the tool **name** when empty, since Bedrock rejects empty descriptions).
 - `InputSchema = Json(toJSONDocument(schema))` — the tool's JSON Schema, or a permissive `{type:object, properties:{}}` fallback.
 Returns the `[]brtypes.Tool` plus a `map[namespacedName]toolBinding{client, realName}`.
 If `maxTools > 0`, the advertised tool list is capped to that many (default 64) to avoid blowing the model's context window with hundreds of tool specs.
+**Browser tools** (frontend-advertised, see [11](./11-browser-tools.md)) are appended *after* the cap as `browser__<name>` — they are never dropped and have no binding (they pause the loop instead of dispatching).
 
-### `Run(ctx, userMessage, history, emit)`
+### `Run(ctx, userMessage, history, browserTools, emit)` / `Continue(ctx, token, results, browserTools, contextText, emit)`
+`Run`:
 1. `collectTools`; on error emit `error` and return.
 2. `messages = buildMessages(history, userMessage)`.
-3. Build optional `ToolConfiguration` and optional `System` block.
-4. Loop up to `maxIterations`, each iteration calling `streamTurn` (below):
-   - If `StopReason != tool_use` or no tool uses → emit `done` (empty payload; the
-     client keeps its already-streamed text) and return.
-   - Else run each tool (`runTool`), collect `toolResult` blocks, append as a
-     **user** message, continue.
-5. If the loop exhausts `maxIterations` → emit `done`.
+3. Delegate to `loop(ctx, messages, 0, tools, bindings, emit)`.
+
+`Continue` (resume after browser tools):
+1. `decodeContinuation(token)` → messages + partial MCP results + pending browser tool ids + iteration index.
+2. Build the tool-result user message: partial results first, then one `toolResult` per pending id (missing ids become error results — Bedrock requires a result for every `toolUse`), then `contextText` (post-action page context) as a trailing text block.
+3. `collectTools` again (MCP clients re-init) and resume `loop` at the saved iteration.
+
+### `loop(ctx, messages, startIter, tools, bindings, emit)`
+Loop from `startIter` up to `maxIterations`, each iteration calling `streamTurn` (below):
+- If `StopReason != tool_use` or no tool uses → emit `done` (empty payload; the
+  client keeps its already-streamed text) and return.
+- Partition tool uses into MCP vs `browser__*`.
+- Run each MCP tool (`runTool`), collect `toolResult` blocks.
+- If any browser tools were requested: emit one `browser_tool_call` per tool,
+  serialize the conversation (+ the MCP results as partials) into a
+  continuation token, emit `paused`, and **return** — the frontend resumes via
+  `Continue`. See [pkg/agent/continuation.go] and [11-browser-tools.md](./11-browser-tools.md).
+- Else append the results as a **user** message and continue.
+If the loop exhausts `maxIterations` → emit `done`.
 
 ### `streamTurn(ctx, messages, system, toolConfig, emit)`
 One `bedrock.ConverseStream(...)` call. Consumes the event stream:

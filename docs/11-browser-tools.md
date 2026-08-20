@@ -29,6 +29,13 @@ The Bedrock loop lives in the Go backend, but browser tools can only run in the 
 | `ask_user` | — | Inline question chips in chat; the user's click is the tool result |
 | `update_panel_query` | 2 | Walks `window.__grafanaSceneContext` to the panel's SceneQueryRunner, `setState({queries})` + `runQueries()` — live in-place edit, unsaved |
 
+`update_panel_query` **refuses dishonest edits**: patching `expr` onto a query
+that never had one (TestData, SQL, etc.) would be silently ignored by the
+datasource, so the tool errors with the query's actual fields and tells the
+model to level with the user (grafana-testdata is synthetic; no aggregation
+exists). Page context includes panel ids and `uid (type)` datasources so the
+model can see this coming (see [06](./06-page-context.md)).
+
 Tier 1 = officially supported URL-state APIs. Tier 2 = semi-private Scenes surface; structural typing + guards, clean error on drift so the model falls back to Tier 1 (`open_explore` / `open_panel_editor`).
 
 ## Confirmation gate

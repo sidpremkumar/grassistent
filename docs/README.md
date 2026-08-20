@@ -14,7 +14,7 @@
 | [03-backend.md](./03-backend.md) | Go packages, app instance lifecycle, SSE `/chat` handler, settings/secrets |
 | [04-mcp-client.md](./04-mcp-client.md) | MCP JSON-RPC-over-HTTP client, handshake, tool namespacing |
 | [05-agent-loop.md](./05-agent-loop.md) | Bedrock ConverseStream tool-use loop, event emission, iteration/tool caps |
-| [06-page-context.md](./06-page-context.md) | Async page-context extraction (dashboard API) + prefill, prompt enrichment |
+| [06-page-context.md](./06-page-context.md) | Async page-context extraction (dashboard API, panel ids, retry + URL tracking) + suggestion chip, prompt enrichment |
 | [07-protocol.md](./07-protocol.md) | Wire contracts: `ChatRequest`, `AgentEvent`, SSE framing |
 | [08-config.md](./08-config.md) | `Settings`/secrets shape, UI>env>defaults precedence, config page |
 | [09-build-and-run.md](./09-build-and-run.md) | Dev-ex loop: build frontend + Go backend, run local Grafana 13.2, env forwarding, provisioning |
