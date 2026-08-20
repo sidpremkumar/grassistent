@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "description": "An open-source Grafana app plugin: a chat agent that connects to any MCP server(s) and auto-prefills your question from the page you're viewing.",
   "scripts": {
-    "build": "cross-env TS_NODE_COMPILER_OPTIONS={\"module\":\"commonjs\"} webpack -c ./webpack.config.ts --env production",
-    "dev": "cross-env TS_NODE_COMPILER_OPTIONS={\"module\":\"commonjs\"} webpack -w -c ./webpack.config.ts --env development",
+    "build": "webpack -c ./webpack.config.ts --env production",
+    "dev": "webpack -w -c ./webpack.config.ts --env development",
     "typecheck": "tsc --noEmit",
     "backend:build": "mage -v build:linux",
+    "backend:build:all": "GOOS=linux GOARCH=amd64 go build -o dist/gpx_mcpagent_linux_amd64 ./pkg && GOOS=linux GOARCH=arm64 go build -o dist/gpx_mcpagent_linux_arm64 ./pkg",
+    "package": "./scripts/package.sh",
     "test": "jest"
   },
   "author": "grafana-mcp-agent contributors",
