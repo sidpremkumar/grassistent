@@ -20,7 +20,7 @@
   "includes": [
     {
       "type": "page",
-      "name": "Chat",
+      "name": "MCP Agent",
       "path": "/a/mcpagent-app",
       "role": "Viewer",
       "addToNav": true,
@@ -35,18 +35,14 @@
     }
   ],
   "extensions": {
-    "addedComponents": [
-      {
-        "title": "MCP Agent",
-        "description": "Slide-out MCP agent chat, prefilled from the current page.",
-        "targets": ["grafana/extension-sidebar/v0-alpha"]
-      }
-    ]
+    "addedLinks": [],
+    "addedComponents": []
   },
   "dependencies": {
-    "grafanaDependency": ">=10.4.0",
+    "grafanaDependency": ">=12.0.0",
     "plugins": []
   },
   "backend": true,
-  "executable": "gpx_mcpagent"
+  "executable": "gpx_mcpagent",
+  "preload": true
 }

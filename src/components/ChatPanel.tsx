@@ -1,49 +1,170 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { css } from '@emotion/css';
-import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
-import { GrafanaTheme2 } from '@grafana/data';
-import { Button, Icon, TextArea, useStyles2 } from '@grafana/ui';
-import { useAgentChat, ChatMessage, ChatToolCall } from './use-agent-chat';
-import { buildPrefill, extractPageContext } from '../lib/page-context';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { css, keyframes } from '@emotion/css';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { GrafanaTheme2, renderMarkdown } from '@grafana/data';
+import { locationService } from '@grafana/runtime';
+import { Button, Icon, IconButton, TextArea, useStyles2 } from '@grafana/ui';
+import { useAgentChat, ChatMessage } from './use-agent-chat';
+import { buildPrefill, extractPageContext, hasPageContext } from '../lib/page-context';
 import { PageContext } from '../lib/protocol';
-import { chipVariants, contextVariants, messageVariants, thinkingPulse } from '../lib/motion';
+import { contextVariants, messageVariants } from '../lib/motion';
+import { ThinkingBlock } from './ThinkingBlock';
+import {
+  ChatSession,
+  deriveTitle,
+  loadStore,
+  newSession,
+  saveStore,
+} from '../lib/chat-store';
 
 /**
- * ChatPanel is the reusable chat surface, rendered both on the full-page app
- * route and inside the slide-out sidebar extension. It reads the current
- * Grafana page context on mount and prefills the input with a suggested
- * question, which the user can edit or clear before sending.
+ * ChatPanel is the reusable chat surface used inside the slide-in drawer. It:
+ *  - reads the current Grafana page context and prefills a suggested question,
+ *  - streams the agent's answer token-by-token,
+ *  - persists every conversation to localStorage and lets the user browse and
+ *    resume prior threads via an inline history list.
  *
- * All motion is driven by framer-motion and respects the user's reduced-motion
- * preference (falls back to instant transitions).
+ * All motion is framer-motion driven and respects reduced-motion preferences.
  */
 
 type Props = {
-  /** Distinguishes the sidebar (compact) layout from the full page. */
+  /** Compact layout tuned for the drawer width. */
   compact?: boolean;
+  /** When provided, renders a close control in the header (drawer mode). */
+  onClose?: () => void;
 };
 
-const genSessionId = (): string => `sess-${Math.random().toString(36).slice(2)}-${Date.now()}`;
-
-export function ChatPanel({ compact = false }: Props) {
+export function ChatPanel({ onClose }: Props) {
   const styles = useStyles2(getStyles);
-  const sessionId = useMemo(genSessionId, []);
-  const { messages, busy, send, cancel, reset } = useAgentChat(sessionId);
   const reduceMotion = useReducedMotion();
+
+  /* Session state is initialised once from localStorage. */
+  const [sessions, setSessions] = useState<ChatSession[]>(() => loadStore().sessions);
+  const [activeId, setActiveId] = useState<string>(() => {
+    const store = loadStore();
+    return store.activeId && store.sessions.some((s) => s.id === store.activeId)
+      ? store.activeId
+      : (store.sessions[0]?.id ?? '');
+  });
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+
+  const active = useMemo(
+    () => sessions.find((s) => s.id === activeId) ?? null,
+    [sessions, activeId],
+  );
+
+  const { messages, busy, interaction, respond, allowAlways, send, cancel, load } = useAgentChat(
+    active?.id ?? 'ephemeral',
+    active?.messages ?? [],
+  );
 
   const [input, setInput] = useState('');
   const [pageContext, setPageContext] = useState<PageContext>({});
+  /* Context-derived question shown as a tappable hint chip, never pre-filled
+   * into the input — tapping it fills the composer. */
+  const [suggestion, setSuggestion] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const ctx = extractPageContext();
-    setPageContext(ctx);
-    setInput(buildPrefill(ctx));
+  const refreshContext = useCallback(() => {
+    void extractPageContext().then((ctx) => {
+      setPageContext(ctx);
+      setSuggestion(buildPrefill(ctx));
+    });
   }, []);
+
+  /* Extract context on mount, retry briefly (Scenes dashboards hydrate async so
+   * the first extraction after login/navigation often sees nothing), and
+   * re-extract on every URL change so the panel tracks the page being viewed. */
+  useEffect(() => {
+    let cancelled = false;
+    const attempt = (retriesLeft: number) => {
+      void extractPageContext().then((ctx) => {
+        if (cancelled) {
+          return;
+        }
+        setPageContext(ctx);
+        if (hasPageContext(ctx)) {
+          setSuggestion(buildPrefill(ctx));
+        } else if (retriesLeft > 0) {
+          window.setTimeout(() => attempt(retriesLeft - 1), 700);
+        }
+      });
+    };
+    attempt(3);
+
+    const sub = locationService.getHistory().listen(() => {
+      if (!cancelled) {
+        refreshContext();
+      }
+    });
+    return () => {
+      cancelled = true;
+      sub();
+    };
+  }, [refreshContext]);
+
+  /* If there is no session yet, create one lazily so history always has a home. */
+  useEffect(() => {
+    if (!active && sessions.length === 0) {
+      const s = newSession();
+      setSessions([s]);
+      setActiveId(s.id);
+    }
+  }, [active, sessions.length]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
+
+  /* Persist the active conversation whenever messages settle. */
+  useEffect(() => {
+    if (!activeId) {
+      return;
+    }
+    setSessions((prev) => {
+      const next = prev.map((s) =>
+        s.id === activeId
+          ? { ...s, messages, title: deriveTitle(messages), updatedAt: Date.now() }
+          : s,
+      );
+      saveStore({ sessions: next, activeId });
+      return next;
+    });
+  }, [messages, activeId]);
+
+  const startNewChat = () => {
+    const s = newSession();
+    setSessions((prev) => [s, ...prev]);
+    setActiveId(s.id);
+    load([]);
+    setHistoryOpen(false);
+    setInput('');
+    refreshContext();
+  };
+
+  const openSession = (id: string) => {
+    const s = sessions.find((x) => x.id === id);
+    if (!s) {
+      return;
+    }
+    setActiveId(id);
+    load(s.messages);
+    setHistoryOpen(false);
+  };
+
+  const deleteSession = (id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      const nextActive = id === activeId ? (next[0]?.id ?? '') : activeId;
+      saveStore({ sessions: next, activeId: nextActive });
+      if (id === activeId) {
+        setActiveId(nextActive);
+        load(next[0]?.messages ?? []);
+      }
+      return next;
+    });
+  };
 
   const onSend = () => {
     const text = input.trim();
@@ -61,97 +182,239 @@ export function ChatPanel({ compact = false }: Props) {
     }
   };
 
-  /* When reduced motion is requested, collapse variants to no-op transitions. */
   const initial = reduceMotion ? false : 'hidden';
 
   return (
-    <div className={css(styles.root, compact && styles.rootCompact)} data-testid="mcpagent-chat">
+    <div className={styles.root} data-testid="mcpagent-chat">
       <div className={styles.header}>
         <div className={styles.title}>
-          <Icon name="comment-alt-share" /> MCP Agent
+          <span className={styles.logo}>
+            <Icon name="comment-alt-share" size="lg" />
+          </span>
+          <div className={styles.titleText}>
+            <span className={styles.titleMain}>MCP Agent</span>
+            <span className={styles.titleSub}>Context-aware assistant</span>
+          </div>
         </div>
-        <Button
-          size="sm"
-          variant="secondary"
-          fill="text"
-          icon="trash-alt"
-          onClick={reset}
-          data-testid="mcpagent-reset"
-          tooltip="New conversation"
-        />
+        <div className={styles.headerActions}>
+          <IconButton
+            name="history"
+            aria-label="Chat history"
+            tooltip="History"
+            onClick={() => setHistoryOpen((v) => !v)}
+            data-testid="mcpagent-history-toggle"
+          />
+          <IconButton
+            name="plus"
+            aria-label="New chat"
+            tooltip="New chat"
+            onClick={startNewChat}
+            data-testid="mcpagent-new"
+          />
+          {onClose && (
+            <IconButton
+              name="times"
+              aria-label="Close MCP Agent"
+              tooltip="Close"
+              onClick={onClose}
+              data-testid="mcpagent-close"
+            />
+          )}
+        </div>
       </div>
 
       <AnimatePresence initial={false}>
-        {pageContext.summary && (
+        {historyOpen && (
           <motion.div
-            className={styles.context}
-            data-testid="mcpagent-context"
+            className={styles.history}
             variants={contextVariants}
             initial={initial}
             animate="visible"
             exit="exit"
+            data-testid="mcpagent-history"
           >
-            <Icon name="compass" size="sm" /> {pageContext.summary}
+            {sessions.length === 0 && <div className={styles.historyEmpty}>No conversations yet.</div>}
+            {sessions.map((s) => (
+              <div
+                key={s.id}
+                className={css(styles.historyItem, s.id === activeId && styles.historyItemActive)}
+                onClick={() => openSession(s.id)}
+                role="button"
+                tabIndex={0}
+              >
+                <Icon name="comment-alt" size="sm" />
+                <span className={styles.historyTitle}>{s.title}</span>
+                <IconButton
+                  name="trash-alt"
+                  size="sm"
+                  aria-label="Delete conversation"
+                  tooltip="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteSession(s.id);
+                  }}
+                />
+              </div>
+            ))}
           </motion.div>
         )}
       </AnimatePresence>
 
+      <ContextDisclosure
+        context={pageContext}
+        open={contextOpen}
+        onToggle={() => setContextOpen((v) => !v)}
+        styles={styles}
+        initial={initial}
+      />
+
       <div className={styles.messages} ref={scrollRef} data-testid="mcpagent-messages">
         {messages.length === 0 && (
-          <motion.div
-            className={styles.empty}
-            initial={initial}
-            animate="visible"
-            variants={messageVariants}
-          >
-            Ask a question about what you&apos;re viewing. The agent can call your configured MCP tools to
-            investigate.
+          <motion.div className={styles.empty} initial={initial} animate="visible" variants={messageVariants}>
+            <div className={styles.emptyIcon}>
+              <Icon name="ai" size="xxl" />
+            </div>
+            <div className={styles.emptyTitle}>Ask about what you&apos;re viewing</div>
+            <div className={styles.emptyBody}>
+              The agent reads your current dashboard, panel, and time range, and can call your configured MCP
+              tools to investigate.
+            </div>
           </motion.div>
         )}
-        <LayoutGroup>
-          <AnimatePresence initial={false}>
-            {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} styles={styles} initial={initial} />
-            ))}
-          </AnimatePresence>
-        </LayoutGroup>
+        <AnimatePresence initial={false}>
+          {messages.map((m) => (
+            <MessageBubble key={m.id} message={m} styles={styles} initial={initial} />
+          ))}
+        </AnimatePresence>
       </div>
 
+      <AnimatePresence initial={false}>
+        {interaction && (
+          <motion.div
+            className={styles.interaction}
+            variants={contextVariants}
+            initial={initial}
+            animate="visible"
+            exit="exit"
+            data-testid="mcpagent-interaction"
+          >
+            <div className={styles.interactionPrompt}>
+              <Icon name={interaction.kind === 'confirm' ? 'shield' : 'question-circle'} size="sm" />
+              <span>{interaction.kind === 'confirm' ? interaction.description : interaction.prompt}</span>
+            </div>
+            <div className={styles.interactionActions}>
+              {interaction.kind === 'confirm' ? (
+                <>
+                  <Button size="sm" onClick={() => respond('yes')} data-testid="mcpagent-confirm-allow">
+                    Allow
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={allowAlways}
+                    data-testid="mcpagent-confirm-always"
+                  >
+                    Always allow
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    fill="outline"
+                    onClick={() => respond('no')}
+                    data-testid="mcpagent-confirm-deny"
+                  >
+                    Deny
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {(interaction.options ?? ['Done']).map((opt) => (
+                    <Button
+                      key={opt}
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => respond(opt)}
+                      data-testid="mcpagent-answer"
+                    >
+                      {opt}
+                    </Button>
+                  ))}
+                </>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className={styles.inputRow}>
-        <TextArea
-          value={input}
-          onChange={(e) => setInput(e.currentTarget.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Ask anything about this page\u2026"
-          rows={compact ? 2 : 3}
-          data-testid="mcpagent-input"
-        />
-        <AnimatePresence mode="wait" initial={false}>
-          {busy ? (
-            <motion.div
-              key="stop"
-              initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
+        <AnimatePresence initial={false}>
+          {suggestion && input.trim() === '' && !busy && !interaction && (
+            <motion.button
+              type="button"
+              className={styles.suggestion}
+              variants={contextVariants}
+              initial={initial}
+              animate="visible"
+              exit="exit"
+              onClick={() => setInput(suggestion)}
+              data-testid="mcpagent-suggestion"
             >
-              <Button variant="destructive" icon="square-shape" onClick={cancel} data-testid="mcpagent-stop">
-                Stop
-              </Button>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="send"
-              initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              whileTap={reduceMotion ? undefined : { scale: 0.94 }}
-            >
-              <Button icon="message" onClick={onSend} disabled={!input.trim()} data-testid="mcpagent-send">
-                Send
-              </Button>
-            </motion.div>
+              <Icon name="ai" size="sm" />
+              <span className={styles.suggestionText}>{suggestion}</span>
+            </motion.button>
           )}
         </AnimatePresence>
+        <div className={styles.inputWrap}>
+          <TextArea
+            value={input}
+            onChange={(e) => setInput(e.currentTarget.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ask anything about this page…"
+            rows={2}
+            className={styles.textarea}
+            data-testid="mcpagent-input"
+          />
+          <AnimatePresence mode="wait" initial={false}>
+            {busy ? (
+              <motion.div
+                key="stop"
+                className={styles.sendBtn}
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+              >
+                <Button
+                  variant="destructive"
+                  icon="square-shape"
+                  onClick={cancel}
+                  aria-label="Stop"
+                  tooltip="Stop"
+                  className={styles.roundBtn}
+                  data-testid="mcpagent-stop"
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="send"
+                className={styles.sendBtn}
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.94 }}
+              >
+                <Button
+                  icon="message"
+                  onClick={onSend}
+                  disabled={!input.trim()}
+                  aria-label="Send"
+                  tooltip="Send"
+                  className={styles.roundBtn}
+                  data-testid="mcpagent-send"
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
     </div>
   );
@@ -167,97 +430,148 @@ function MessageBubble({
   initial: 'hidden' | false;
 }) {
   const isUser = message.role === 'user';
+
+  if (isUser) {
+    return (
+      <motion.div
+        className={css(styles.bubbleWrap, styles.bubbleWrapUser)}
+        variants={messageVariants}
+        initial={initial}
+        animate="visible"
+        exit="exit"
+      >
+        <div className={css(styles.bubble, styles.bubbleUser)}>
+          <div className={styles.content}>{message.content}</div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  const hasAnswer = message.content.trim().length > 0;
+  /* No `layout` here: animating height while tokens stream causes the bubble to
+   * "squish"/reflow on every chunk. The stream itself provides the typewriter
+   * effect; we just append a blinking caret while it's live. */
   return (
     <motion.div
-      layout
-      className={css(styles.bubbleWrap, isUser ? styles.bubbleWrapUser : styles.bubbleWrapAssistant)}
+      className={css(styles.bubbleWrap, styles.bubbleWrapAssistant)}
       variants={messageVariants}
       initial={initial}
       animate="visible"
       exit="exit"
     >
-      <div className={css(styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant)}>
-        {message.toolCalls.length > 0 && (
-          <div className={styles.toolTrace}>
-            <AnimatePresence initial={false}>
-              {message.toolCalls.map((tc) => (
-                <ToolChip key={tc.id} tool={tc} styles={styles} initial={initial} />
-              ))}
-            </AnimatePresence>
+      <div className={styles.assistant}>
+        <ThinkingBlock
+          reasoning={message.reasoning}
+          toolCalls={message.toolCalls}
+          streaming={message.streaming}
+          hasAnswer={hasAnswer}
+        />
+        {hasAnswer && (
+          <div className={styles.answer}>
+            <span
+              className={styles.markdown}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
+            />
+            {message.streaming && <span className={styles.caret} />}
           </div>
         )}
-        {message.content && <div className={styles.content}>{message.content}</div>}
-        <AnimatePresence>
-          {message.streaming && (
-            <motion.div
-              className={styles.streaming}
-              variants={thinkingPulse}
-              animate="animate"
-              exit={{ opacity: 0 }}
-            >
-              <ThinkingDots />
-              {message.status ?? 'Thinking\u2026'}
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
     </motion.div>
   );
 }
 
-/** Three-dot loader with a staggered vertical bounce. */
-function ThinkingDots() {
-  const styles = useStyles2(getStyles);
-  return (
-    <span className={styles.dots} aria-hidden>
-      {[0, 1, 2].map((i) => (
-        <motion.span
-          key={i}
-          className={styles.dot}
-          animate={{ y: [0, -3, 0] }}
-          transition={{ duration: 0.9, repeat: Infinity, ease: 'easeInOut', delay: i * 0.15 }}
-        />
-      ))}
-    </span>
-  );
-}
-
-function ToolChip({
-  tool,
+/**
+ * Renders a compact, expandable summary of exactly what page context the agent
+ * received. This makes the agent's awareness legible: when it says "I can't see
+ * the dashboard", the user can open this to confirm whether context was
+ * captured, and what.
+ */
+function ContextDisclosure({
+  context,
+  open,
+  onToggle,
   styles,
   initial,
 }: {
-  tool: ChatToolCall;
+  context: PageContext;
+  open: boolean;
+  onToggle: () => void;
   styles: ReturnType<typeof getStyles>;
   initial: 'hidden' | false;
 }) {
-  const isRunning = tool.status === 'running';
-  const icon = isRunning ? 'sync' : tool.status === 'error' ? 'exclamation-triangle' : 'check';
+  const rows: Array<{ label: string; value: string }> = [];
+  if (context.dashboardTitle) {
+    rows.push({ label: 'Dashboard', value: context.dashboardTitle });
+  }
+  if (context.datasource) {
+    rows.push({ label: 'Datasource', value: context.datasource });
+  }
+  if (context.timeRange) {
+    rows.push({ label: 'Time range', value: `${context.timeRange.from} → ${context.timeRange.to}` });
+  }
+  const queries = context.queries ?? [];
+  const hasContext = rows.length > 0 || queries.length > 0;
+
+  const headline = hasContext
+    ? `Agent sees ${queries.length > 0 ? `${queries.length} quer${queries.length === 1 ? 'y' : 'ies'}` : 'this page'}`
+    : 'Agent has no page context';
+
   return (
-    <motion.div
-      layout
-      className={css(styles.toolChip, tool.status === 'error' && styles.toolChipError)}
-      title={tool.error ?? tool.preview ?? ''}
-      data-testid="mcpagent-toolchip"
-      variants={chipVariants}
-      initial={initial}
-      animate="visible"
-      exit="exit"
-    >
-      <motion.span
-        animate={isRunning ? { rotate: 360 } : { rotate: 0 }}
-        transition={isRunning ? { duration: 1, repeat: Infinity, ease: 'linear' } : { duration: 0.2 }}
-        className={styles.toolIcon}
+    <div className={styles.context} data-testid="mcpagent-context">
+      <button
+        type="button"
+        className={styles.contextHeader}
+        onClick={onToggle}
+        aria-expanded={open}
+        data-testid="mcpagent-context-toggle"
       >
-        <Icon name={icon} size="sm" />
-      </motion.span>
-      <span className={styles.toolName}>
-        {tool.server ? `${tool.server} / ` : ''}
-        {tool.name}
-      </span>
-    </motion.div>
+        <Icon name={hasContext ? 'eye' : 'eye-slash'} size="sm" />
+        <span className={styles.contextHeadline}>{headline}</span>
+        <Icon name={open ? 'angle-up' : 'angle-down'} size="sm" />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            className={styles.contextBody}
+            variants={contextVariants}
+            initial={initial}
+            animate="visible"
+            exit="exit"
+          >
+            {!hasContext && (
+              <div className={styles.contextEmpty}>
+                No dashboard, panel, or query detected on this page. Open a dashboard or Explore, then
+                reopen this chat to give the agent context.
+              </div>
+            )}
+            {rows.map((r) => (
+              <div key={r.label} className={styles.contextRow}>
+                <span className={styles.contextLabel}>{r.label}</span>
+                <span className={styles.contextValue}>{r.value}</span>
+              </div>
+            ))}
+            {queries.length > 0 && (
+              <div className={styles.contextQueries}>
+                <span className={styles.contextLabel}>Queries</span>
+                {queries.map((q, i) => (
+                  <code key={i} className={styles.contextQuery}>
+                    {q}
+                  </code>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
+
+const caretBlink = keyframes({
+  '0%, 50%': { opacity: 1 },
+  '50.01%, 100%': { opacity: 0 },
+});
 
 const getStyles = (theme: GrafanaTheme2) => ({
   root: css({
@@ -267,32 +581,137 @@ const getStyles = (theme: GrafanaTheme2) => ({
     minHeight: 0,
     background: theme.colors.background.primary,
   }),
-  rootCompact: css({
-    maxWidth: '420px',
-  }),
   header: css({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: theme.spacing(1, 2),
+    padding: theme.spacing(1.5, 2),
     borderBottom: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
   }),
   title: css({
     display: 'flex',
     alignItems: 'center',
-    gap: theme.spacing(1),
-    fontWeight: theme.typography.fontWeightMedium,
+    gap: theme.spacing(1.5),
+    minWidth: 0,
   }),
-  context: css({
+  logo: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    borderRadius: theme.shape.radius.default,
+    color: theme.colors.primary.contrastText,
+    background: `linear-gradient(135deg, ${theme.colors.primary.main}, ${theme.colors.primary.shade})`,
+    boxShadow: theme.shadows.z1,
+  }),
+  titleText: css({ display: 'flex', flexDirection: 'column', lineHeight: 1.15, minWidth: 0 }),
+  titleMain: css({ fontWeight: theme.typography.fontWeightBold, fontSize: theme.typography.body.fontSize }),
+  titleSub: css({ fontSize: theme.typography.bodySmall.fontSize, color: theme.colors.text.secondary }),
+  headerActions: css({ display: 'flex', alignItems: 'center', gap: theme.spacing(0.5) }),
+  history: css({
+    overflow: 'hidden',
+    borderBottom: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+    maxHeight: 260,
+    overflowY: 'auto',
+  }),
+  historyEmpty: css({
+    padding: theme.spacing(2),
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    textAlign: 'center',
+  }),
+  historyItem: css({
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(1),
     padding: theme.spacing(1, 2),
-    fontSize: theme.typography.bodySmall.fontSize,
+    cursor: 'pointer',
     color: theme.colors.text.secondary,
+    borderBottom: `1px solid ${theme.colors.border.weak}`,
+    transition: 'background 120ms ease, color 120ms ease',
+    '&:hover': {
+      background: theme.colors.action.hover,
+      color: theme.colors.text.primary,
+    },
+  }),
+  historyItemActive: css({
+    color: theme.colors.text.primary,
+    background: theme.colors.action.selected,
+  }),
+  historyTitle: css({
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  context: css({
     background: theme.colors.background.secondary,
     borderBottom: `1px solid ${theme.colors.border.weak}`,
     overflow: 'hidden',
+  }),
+  contextHeader: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    width: '100%',
+    padding: theme.spacing(1, 2),
+    border: 'none',
+    background: 'transparent',
+    color: theme.colors.text.secondary,
+    cursor: 'pointer',
+    fontSize: theme.typography.bodySmall.fontSize,
+    textAlign: 'left',
+    '&:hover': { color: theme.colors.text.primary },
+  }),
+  contextHeadline: css({
+    flex: 1,
+    fontWeight: theme.typography.fontWeightMedium,
+  }),
+  contextBody: css({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.75),
+    padding: theme.spacing(0, 2, 1.5, 2),
+    fontSize: theme.typography.bodySmall.fontSize,
+  }),
+  contextEmpty: css({
+    color: theme.colors.text.secondary,
+    lineHeight: 1.4,
+  }),
+  contextRow: css({
+    display: 'flex',
+    gap: theme.spacing(1),
+  }),
+  contextLabel: css({
+    color: theme.colors.text.secondary,
+    minWidth: 84,
+    flexShrink: 0,
+  }),
+  contextValue: css({
+    color: theme.colors.text.primary,
+    wordBreak: 'break-word',
+  }),
+  contextQueries: css({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
+  }),
+  contextQuery: css({
+    display: 'block',
+    fontFamily: theme.typography.fontFamilyMonospace,
+    fontSize: theme.typography.size.xs,
+    color: theme.colors.text.primary,
+    background: theme.colors.background.primary,
+    border: `1px solid ${theme.colors.border.weak}`,
+    borderRadius: theme.shape.radius.default,
+    padding: theme.spacing(0.5, 1),
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
   }),
   messages: css({
     flex: 1,
@@ -307,8 +726,22 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.text.secondary,
     textAlign: 'center',
     margin: 'auto',
-    maxWidth: '32ch',
+    maxWidth: '34ch',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: theme.spacing(1),
   }),
+  emptyIcon: css({
+    color: theme.colors.primary.text,
+    opacity: 0.7,
+  }),
+  emptyTitle: css({
+    fontWeight: theme.typography.fontWeightMedium,
+    color: theme.colors.text.primary,
+    fontSize: theme.typography.h5.fontSize,
+  }),
+  emptyBody: css({ fontSize: theme.typography.bodySmall.fontSize, lineHeight: 1.5 }),
   bubbleWrap: css({ display: 'flex' }),
   bubbleWrapUser: css({ justifyContent: 'flex-end' }),
   bubbleWrapAssistant: css({ justifyContent: 'flex-start' }),
@@ -321,58 +754,162 @@ const getStyles = (theme: GrafanaTheme2) => ({
     boxShadow: theme.shadows.z1,
   }),
   bubbleUser: css({
-    background: theme.colors.primary.main,
+    background: `linear-gradient(135deg, ${theme.colors.primary.main}, ${theme.colors.primary.shade})`,
     color: theme.colors.primary.contrastText,
-  }),
-  bubbleAssistant: css({
-    background: theme.colors.background.secondary,
-    border: `1px solid ${theme.colors.border.weak}`,
+    borderBottomRightRadius: theme.spacing(0.5),
   }),
   content: css({ lineHeight: theme.typography.body.lineHeight }),
-  toolTrace: css({
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: theme.spacing(0.5),
-    marginBottom: theme.spacing(1),
+  assistant: css({ width: '100%', maxWidth: '100%' }),
+  answer: css({
+    lineHeight: theme.typography.body.lineHeight,
+    wordBreak: 'break-word',
+    color: theme.colors.text.primary,
   }),
-  toolChip: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    padding: theme.spacing(0.25, 0.75),
-    borderRadius: theme.shape.radius.pill,
-    background: theme.colors.background.canvas,
-    border: `1px solid ${theme.colors.border.medium}`,
-    fontSize: theme.typography.bodySmall.fontSize,
-    color: theme.colors.text.secondary,
+  markdown: css({
+    '& > *:first-child': { marginTop: 0 },
+    '& > *:last-child': { marginBottom: 0 },
+    '& p': { margin: theme.spacing(0, 0, 1) },
+    '& ul, & ol': { margin: theme.spacing(0, 0, 1), paddingLeft: theme.spacing(2.5) },
+    '& li': { margin: theme.spacing(0.25, 0) },
+    '& h1, & h2, & h3, & h4': {
+      margin: theme.spacing(1.5, 0, 0.5),
+      fontWeight: theme.typography.fontWeightMedium,
+      lineHeight: 1.3,
+    },
+    '& h1': { fontSize: theme.typography.h4.fontSize },
+    '& h2': { fontSize: theme.typography.h5.fontSize },
+    '& h3, & h4': { fontSize: theme.typography.body.fontSize },
+    '& a': { color: theme.colors.text.link, textDecoration: 'underline' },
+    '& strong': { fontWeight: theme.typography.fontWeightBold },
+    '& code': {
+      fontFamily: theme.typography.fontFamilyMonospace,
+      fontSize: '0.9em',
+      padding: theme.spacing(0.125, 0.5),
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.secondary,
+    },
+    '& pre': {
+      margin: theme.spacing(0, 0, 1),
+      padding: theme.spacing(1),
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.canvas,
+      border: `1px solid ${theme.colors.border.weak}`,
+      overflowX: 'auto',
+    },
+    '& pre code': { padding: 0, background: 'transparent' },
+    '& blockquote': {
+      margin: theme.spacing(0, 0, 1),
+      paddingLeft: theme.spacing(1.5),
+      borderLeft: `3px solid ${theme.colors.border.medium}`,
+      color: theme.colors.text.secondary,
+    },
+    '& table': { borderCollapse: 'collapse', margin: theme.spacing(0, 0, 1) },
+    '& th, & td': {
+      border: `1px solid ${theme.colors.border.weak}`,
+      padding: theme.spacing(0.5, 1),
+    },
   }),
-  toolChipError: css({
-    borderColor: theme.colors.error.border,
-    color: theme.colors.error.text,
-  }),
-  toolIcon: css({ display: 'inline-flex' }),
-  toolName: css({ fontFamily: theme.typography.fontFamilyMonospace }),
-  streaming: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    marginTop: theme.spacing(1),
-    color: theme.colors.text.secondary,
-    fontSize: theme.typography.bodySmall.fontSize,
-  }),
-  dots: css({ display: 'inline-flex', gap: '3px', alignItems: 'flex-end' }),
-  dot: css({
-    width: '5px',
-    height: '5px',
-    borderRadius: '50%',
-    background: 'currentColor',
+  caret: css({
     display: 'inline-block',
+    width: '2px',
+    height: '1.05em',
+    marginLeft: '2px',
+    verticalAlign: 'text-bottom',
+    background: theme.colors.primary.text,
+    animation: `${caretBlink} 1s steps(1) infinite`,
+  }),
+  interaction: css({
+    margin: theme.spacing(0, 2, 1, 2),
+    padding: theme.spacing(1.5),
+    borderRadius: theme.spacing(1.5),
+    border: `1px solid ${theme.colors.warning.border}`,
+    background: theme.colors.warning.transparent,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(1),
+  }),
+  interactionPrompt: css({
+    display: 'flex',
+    gap: theme.spacing(1),
+    alignItems: 'flex-start',
+    fontSize: theme.typography.bodySmall.fontSize,
+    color: theme.colors.text.primary,
+    '& svg': { flexShrink: 0, marginTop: 2 },
+  }),
+  interactionActions: css({
+    display: 'flex',
+    gap: theme.spacing(1),
+    flexWrap: 'wrap',
+  }),
+  suggestion: css({
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: theme.spacing(1),
+    width: '100%',
+    marginBottom: theme.spacing(1),
+    padding: theme.spacing(1, 1.5),
+    borderRadius: theme.spacing(1.5),
+    border: `1px dashed ${theme.colors.border.medium}`,
+    background: 'transparent',
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    textAlign: 'left',
+    cursor: 'pointer',
+    transition: 'border-color 0.15s ease, color 0.15s ease, background 0.15s ease',
+    '&:hover': {
+      borderColor: theme.colors.primary.border,
+      color: theme.colors.text.primary,
+      background: theme.colors.action.hover,
+    },
+    '& svg': { flexShrink: 0, marginTop: 2 },
+  }),
+  suggestionText: css({
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
   }),
   inputRow: css({
-    display: 'flex',
-    gap: theme.spacing(1),
     padding: theme.spacing(2),
     borderTop: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+  }),
+  inputWrap: css({
+    display: 'flex',
+    gap: theme.spacing(1),
     alignItems: 'flex-end',
+    padding: theme.spacing(1),
+    borderRadius: theme.spacing(1.5),
+    background: theme.colors.background.primary,
+    border: `1px solid ${theme.colors.border.medium}`,
+    transition: 'border-color 120ms ease, box-shadow 120ms ease',
+    '&:focus-within': {
+      borderColor: theme.colors.primary.border,
+      boxShadow: `0 0 0 1px ${theme.colors.primary.border}`,
+    },
+  }),
+  textarea: css({
+    flex: 1,
+    minWidth: 0,
+    border: 'none',
+    background: 'transparent',
+    boxShadow: 'none',
+    resize: 'none',
+    padding: theme.spacing(0.5, 0),
+    minHeight: 36,
+    '&:focus': { boxShadow: 'none' },
+  }),
+  sendBtn: css({
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+  }),
+  roundBtn: css({
+    width: 36,
+    height: 36,
+    padding: 0,
+    borderRadius: theme.spacing(1),
+    justifyContent: 'center',
+    '& svg': { margin: 0 },
   }),
 });

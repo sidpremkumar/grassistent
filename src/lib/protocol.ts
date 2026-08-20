@@ -25,11 +25,32 @@ export type PageContext = {
 
 export type ChatRequest = {
   sessionId: string;
+  /** The user's question. Ignored when `continuation` is set. */
   message: string;
   /** Prior turns for multi-turn context. */
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   /** Grafana page context used to enrich the system/user prompt. */
   pageContext?: PageContext;
+  /** Tools this frontend can execute in the page (advertised every request). */
+  browserTools?: BrowserToolSpec[];
+  /** Opaque resume token from a `paused` event; resumes that turn. */
+  continuation?: string;
+  /** Results of the browser tool calls the paused turn asked for. */
+  toolResults?: BrowserToolResult[];
+};
+
+/** A tool the frontend executes in the user's page (namespaced browser__ server-side). */
+export type BrowserToolSpec = {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+/** Outcome of one browser-executed tool call, echoed back on continuation. */
+export type BrowserToolResult = {
+  id: string;
+  content: string;
+  isError?: boolean;
 };
 
 /* ---- Backend -> Frontend (SSE `data:` payloads) ---- */
@@ -45,10 +66,14 @@ export type AgentEvent =
   | { type: 'tool_call'; id: string; server: string; name: string; input: unknown; status: 'running' }
   /** An MCP tool returned (or errored). */
   | { type: 'tool_result'; id: string; status: 'completed' | 'error'; preview?: string; error?: string }
+  /** The agent wants this frontend to execute a tool in the page. */
+  | { type: 'browser_tool_call'; id: string; server: 'browser'; name: string; input: unknown; status: 'running' }
+  /** The turn paused on browser tools; resume by POSTing the continuation + results. */
+  | { type: 'paused'; continuation: string }
   /** Progress marker for long multi-step loops. */
   | { type: 'status'; text: string }
-  /** Terminal success event; `content` holds the full final answer. */
-  | { type: 'done'; content: string }
+  /** Terminal success event. Text was streamed via `content`; `content` here is optional. */
+  | { type: 'done'; content?: string }
   /** Terminal error event. */
   | { type: 'error'; error: string };
 

@@ -1,0 +1,26 @@
+apiVersion: 1
+
+# Mock datasources so the agent's page-context prefill has something to read
+# when you open a dashboard/panel locally. TestData DB ships with Grafana.
+datasources:
+  - name: Mock Metrics
+    uid: mock-metrics
+    type: grafana-testdata-datasource
+    access: proxy
+    isDefault: true
+    editable: true
+
+  - name: Mock Logs
+    uid: mock-logs
+    type: grafana-testdata-datasource
+    access: proxy
+    editable: true
+
+  # Real Prometheus (dev compose service) so the agent's browser tools have a
+  # genuine query language to rewrite. Self-scrapes + scrapes Grafana.
+  - name: Local Prometheus
+    uid: local-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    editable: true

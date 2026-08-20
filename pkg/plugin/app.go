@@ -70,5 +70,9 @@ func (a *App) buildClients() []*mcp.Client {
 
 // newAgent wires the Bedrock client + MCP clients into an agent.
 func (a *App) newAgent() *agent.Agent {
-	return agent.New(a.bedrock, a.settings.ModelID, a.settings.SystemPrompt, a.settings.MaxToolIterations, a.buildClients())
+	systemPrompt := a.settings.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = agent.DefaultSystemPrompt
+	}
+	return agent.New(a.bedrock, a.settings.ModelID, systemPrompt, a.settings.MaxToolIterations, a.settings.MaxTools, a.buildClients())
 }

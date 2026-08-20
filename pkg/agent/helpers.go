@@ -54,16 +54,23 @@ func toJSONDocument(v map[string]any) brdoc.Interface {
 	return brdoc.NewLazyDocument(v)
 }
 
+// toolInputDocument builds a Bedrock document from a raw JSON string. Used when
+// reconstructing streamed tool_use blocks, whose input arrives as concatenated
+// partial-JSON deltas. Falls back to an empty object on parse failure.
+func toolInputDocument(raw string) brdoc.Interface {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return brdoc.NewLazyDocument(map[string]any{})
+	}
+	return brdoc.NewLazyDocument(v)
+}
+
 // documentToJSON serializes a Bedrock document (tool input) back to JSON bytes.
 func documentToJSON(doc brdoc.Interface) ([]byte, error) {
 	if doc == nil {
 		return []byte("{}"), nil
 	}
-	var v any
-	if err := doc.UnmarshalSmithyDocument(&v); err != nil {
-		return []byte("{}"), err
-	}
-	b, err := json.Marshal(v)
+	b, err := doc.MarshalSmithyDocument()
 	if err != nil {
 		return []byte("{}"), err
 	}

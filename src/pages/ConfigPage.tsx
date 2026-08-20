@@ -40,7 +40,7 @@ export function ConfigPage({ plugin }: Props) {
 
   const [region, setRegion] = useState(jsonData.bedrockRegion ?? 'us-east-1');
   const [modelId, setModelId] = useState(
-    jsonData.modelId ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    jsonData.modelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
   );
   const [maxIter, setMaxIter] = useState<number>(jsonData.maxToolIterations ?? 12);
   const [systemPrompt, setSystemPrompt] = useState(jsonData.systemPrompt ?? '');

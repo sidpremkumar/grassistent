@@ -1,50 +1,64 @@
 import type { Configuration } from 'webpack';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
 import ForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
-import ReplaceInFileWebpackPlugin from 'replace-in-file-webpack-plugin';
-import { getPackageJson, getPluginId } from './webpack.helpers';
 
-const dirname = path.dirname(fileURLToPath(import.meta.url));
+/* eslint-disable @typescript-eslint/no-var-requires */
+// Untyped plugin; require avoids a missing-declaration compile error under ts-node.
+const ReplaceInFileWebpackPlugin = require('replace-in-file-webpack-plugin');
 
 /**
  * Webpack build for the plugin frontend. Emits into `dist/`, copies static
  * assets (plugin.json, README, img) and stamps %VERSION%/%TODAY% into
  * plugin.json so the manifest matches package.json at build time.
+ *
+ * Helpers are inlined (rather than imported) to keep this config loadable by
+ * webpack-cli's ts-node bridge without ESM/extension resolution issues.
  */
+
+function readJson(file: string): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, file), 'utf8')) as Record<string, unknown>;
+}
+
 const config = async (env: Record<string, unknown>): Promise<Configuration> => {
   const production = Boolean(env.production);
-  const pluginId = getPluginId();
-  const pkg = getPackageJson();
+  const pkg = readJson('package.json');
+  const pluginId = (readJson('src/plugin.json').id as string) ?? 'mcpagent-app';
+  const version = (pkg.version as string) ?? '0.0.0';
 
   return {
     mode: production ? 'production' : 'development',
-    context: path.join(dirname, 'src'),
+    context: path.join(__dirname, 'src'),
     devtool: production ? 'source-map' : 'eval-source-map',
     entry: {
-      module: './module.ts',
+      module: './module.tsx',
     },
     externals: [
       'react',
       'react-dom',
+      'react-dom/client',
       '@grafana/data',
       '@grafana/runtime',
       '@grafana/ui',
       '@emotion/css',
       // Grafana loads plugins as AMD modules; these are provided by the host.
-      ({ request }, callback) => {
+      ({ request }: { request?: string }, callback: (err?: null, result?: string) => void) => {
         const prefix = 'grafana/';
         if (request?.startsWith(prefix)) {
-          return callback(undefined, `amd ${request}`);
+          return callback(null, `amd ${request}`);
         }
         return callback();
       },
     ],
     output: {
-      clean: true,
+      // Clean only frontend build artifacts; preserve the Go backend binaries
+      // (gpx_*) that are emitted into dist/ by `mage`/`go build`.
+      clean: {
+        keep: /gpx_/,
+      },
       filename: '[name].js',
-      path: path.join(dirname, 'dist'),
+      path: path.join(__dirname, 'dist'),
       libraryTarget: 'amd',
       publicPath: `public/plugins/${pluginId}/`,
       uniqueName: pluginId,
@@ -80,23 +94,22 @@ const config = async (env: Record<string, unknown>): Promise<Configuration> => {
         patterns: [
           { from: 'plugin.json', to: '.' },
           { from: '../README.md', to: '.', noErrorOnMissing: true },
-          { from: '../CHANGELOG.md', to: '.', noErrorOnMissing: true },
           { from: '../LICENSE', to: '.', noErrorOnMissing: true },
           { from: 'img/**/*', to: '.', noErrorOnMissing: true },
         ],
       }),
       new ReplaceInFileWebpackPlugin([
         {
-          dir: path.join(dirname, 'dist'),
+          dir: path.join(__dirname, 'dist'),
           files: ['plugin.json'],
           rules: [
-            { search: /%VERSION%/g, replace: pkg.version },
+            { search: /%VERSION%/g, replace: version },
             { search: /%TODAY%/g, replace: new Date().toISOString().slice(0, 10) },
           ],
         },
       ]),
       new ForkTsCheckerWebpackPlugin({
-        typescript: { configFile: path.join(dirname, 'tsconfig.json') },
+        typescript: { configFile: path.join(__dirname, 'tsconfig.json') },
       }),
     ],
   };

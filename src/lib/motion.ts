@@ -48,16 +48,39 @@ export const contextVariants: Variants = {
   exit: { opacity: 0, height: 0, transition: { duration: 0.15 } },
 };
 
-/** Sidebar slides in from the right edge. */
-export const sidebarVariants: Variants = {
-  hidden: { opacity: 0, x: 24 },
-  visible: { opacity: 1, x: 0, transition: spring },
-};
-
 /** Full page fades/rises on mount. */
 export const pageVariants: Variants = {
   hidden: { opacity: 0, y: 12 },
   visible: { opacity: 1, y: 0, transition: spring },
+};
+
+/** Right-side drawer slides in from the edge. */
+export const drawerVariants: Variants = {
+  hidden: { x: '100%' },
+  visible: { x: 0, transition: spring },
+  exit: { x: '100%', transition: { duration: 0.2, ease: 'easeInOut' } },
+};
+
+/** Backdrop fade behind the drawer. */
+export const backdropVariants: Variants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { duration: 0.2 } },
+  exit: { opacity: 0, transition: { duration: 0.15 } },
+};
+
+/** Floating chat button: gentle scale-in with a hover/press response. */
+export const fabVariants: Variants = {
+  hidden: { opacity: 0, scale: 0.6, y: 8 },
+  visible: { opacity: 1, scale: 1, y: 0, transition: spring },
+  hover: { scale: 1.06, transition: springFast },
+  tap: { scale: 0.94, transition: springFast },
+};
+
+/** Chat popover rises from the button anchor (bottom-right origin). */
+export const popoverVariants: Variants = {
+  hidden: { opacity: 0, scale: 0.96, y: 16 },
+  visible: { opacity: 1, scale: 1, y: 0, transition: spring },
+  exit: { opacity: 0, scale: 0.96, y: 16, transition: { duration: 0.16 } },
 };
 
 /** Looping pulse for the "thinking" indicator. */

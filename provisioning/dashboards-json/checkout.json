@@ -1,0 +1,66 @@
+{
+  "uid": "mock-checkout",
+  "title": "Checkout API",
+  "tags": ["mock"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "custom",
+        "query": "checkout,payments,cart",
+        "current": { "text": "checkout", "value": "checkout" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "p99 latency",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-testdata-datasource", "uid": "mock-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "scenarioId": "random_walk",
+          "alias": "p99_latency_ms",
+          "datasource": { "type": "grafana-testdata-datasource", "uid": "mock-metrics" }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Error rate",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-testdata-datasource", "uid": "mock-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "scenarioId": "random_walk",
+          "alias": "error_rate",
+          "datasource": { "type": "grafana-testdata-datasource", "uid": "mock-metrics" }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP requests (real Prometheus)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "local-prom" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(prometheus_http_requests_total[1m]))",
+          "legendFormat": "req/s",
+          "datasource": { "type": "prometheus", "uid": "local-prom" }
+        }
+      ]
+    }
+  ]
+}

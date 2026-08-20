@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "description": "An open-source Grafana app plugin: a chat agent that connects to any MCP server(s) and auto-prefills your question from the page you're viewing.",
   "scripts": {
-    "build": "webpack -c ./webpack.config.ts --env production",
-    "dev": "webpack -w -c ./webpack.config.ts --env development",
+    "build": "cross-env TS_NODE_COMPILER_OPTIONS={\"module\":\"commonjs\"} webpack -c ./webpack.config.ts --env production",
+    "dev": "cross-env TS_NODE_COMPILER_OPTIONS={\"module\":\"commonjs\"} webpack -w -c ./webpack.config.ts --env development",
     "typecheck": "tsc --noEmit",
     "backend:build": "mage -v build:linux",
     "test": "jest"
@@ -33,7 +33,7 @@
     "@grafana/data": "^13.2.0",
     "@grafana/runtime": "^13.2.0",
     "@grafana/ui": "^13.2.0",
-    "framer-motion": "^13.1.0",
+    "framer-motion": "^11.11.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tslib": "^2.8.1"

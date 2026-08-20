@@ -1,0 +1,14 @@
+# Prometheus scrape config for the grafana-mcp-agent dev environment.
+# Self-scrape + Grafana scrape gives real, live metrics with zero seeding, so
+# browser tools (update_panel_query / open_explore) have a real query language
+# to act on during development.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
