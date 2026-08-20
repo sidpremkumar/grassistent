@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.idea/
+*.log
+
+# Go backend build artifacts (mage emits into dist/)
+/pkg/**/*.test
+
+# Local Grafana provisioning
+.env

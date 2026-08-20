@@ -1,0 +1,52 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "MCP Agent",
+  "id": "mcpagent-app",
+  "info": {
+    "description": "A chat agent for Grafana that connects to any MCP server(s) and auto-prefills your question from the dashboard, panel, time range, or alert you're viewing. Model calls run in the plugin backend (AWS Bedrock / Claude).",
+    "author": {
+      "name": "grafana-mcp-agent contributors"
+    },
+    "keywords": ["ai", "agent", "mcp", "assistant", "chat", "bedrock", "claude"],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Chat",
+      "path": "/a/mcpagent-app",
+      "role": "Viewer",
+      "addToNav": true,
+      "defaultNav": true
+    },
+    {
+      "type": "page",
+      "name": "Configuration",
+      "path": "/plugins/mcpagent-app",
+      "role": "Admin",
+      "addToNav": false
+    }
+  ],
+  "extensions": {
+    "addedComponents": [
+      {
+        "title": "MCP Agent",
+        "description": "Slide-out MCP agent chat, prefilled from the current page.",
+        "targets": ["grafana/extension-sidebar/v0-alpha"]
+      }
+    ]
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.4.0",
+    "plugins": []
+  },
+  "backend": true,
+  "executable": "gpx_mcpagent"
+}
