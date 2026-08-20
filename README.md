@@ -22,6 +22,7 @@ Detailed docs live in [`docs/`](./docs/README.md). They are written primarily fo
 - [Protocol](./docs/07-protocol.md) — `ChatRequest` / `AgentEvent` / SSE framing
 - [Config](./docs/08-config.md) — settings/secrets, config page
 - [Build & run](./docs/09-build-and-run.md) — dev-ex loop: build, local Grafana 13.2, provisioning
+- [Install on EKS](./docs/12-install-eks.md) — deploy on self-hosted Grafana in EKS with IRSA/OIDC (agent runbook)
 - [Roadmap & gaps](./docs/10-roadmap.md) — what's not done yet
 
 ## How it works

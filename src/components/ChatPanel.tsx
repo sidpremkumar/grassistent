@@ -9,6 +9,7 @@ import { buildPrefill, extractPageContext, hasPageContext } from '../lib/page-co
 import { PageContext } from '../lib/protocol';
 import { contextVariants, messageVariants } from '../lib/motion';
 import { ThinkingBlock } from './ThinkingBlock';
+import { Branding, isSafeIconSrc, loadBranding } from '../lib/branding';
 import {
   ChatSession,
   deriveTitle,
@@ -48,6 +49,21 @@ export function ChatPanel({ onClose }: Props) {
   });
   const [historyOpen, setHistoryOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
+  const [branding, setBranding] = useState<Branding>({});
+
+  /* Operator branding (custom icon/name) is fetched once and cached; falls back
+   * to the built-in glyph and labels when unset. */
+  useEffect(() => {
+    let cancelled = false;
+    void loadBranding().then((b) => {
+      if (!cancelled) {
+        setBranding(b);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const active = useMemo(
     () => sessions.find((s) => s.id === activeId) ?? null,
@@ -189,11 +205,15 @@ export function ChatPanel({ onClose }: Props) {
       <div className={styles.header}>
         <div className={styles.title}>
           <span className={styles.logo}>
-            <Icon name="comment-alt-share" size="lg" />
+            {isSafeIconSrc(branding.icon) ? (
+              <img className={styles.logoImg} src={branding.icon} alt="" aria-hidden />
+            ) : (
+              <Icon name="comment-alt-share" size="lg" />
+            )}
           </span>
           <div className={styles.titleText}>
-            <span className={styles.titleMain}>MCP Agent</span>
-            <span className={styles.titleSub}>Context-aware assistant</span>
+            <span className={styles.titleMain}>{branding.name || 'MCP Agent'}</span>
+            <span className={styles.titleSub}>{branding.subtitle || 'Context-aware assistant'}</span>
           </div>
         </div>
         <div className={styles.headerActions}>
@@ -605,6 +625,13 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: theme.colors.primary.contrastText,
     background: `linear-gradient(135deg, ${theme.colors.primary.main}, ${theme.colors.primary.shade})`,
     boxShadow: theme.shadows.z1,
+  }),
+  logoImg: css({
+    width: 22,
+    height: 22,
+    objectFit: 'contain',
+    display: 'block',
+    borderRadius: theme.shape.radius.default,
   }),
   titleText: css({ display: 'flex', flexDirection: 'column', lineHeight: 1.15, minWidth: 0 }),
   titleMain: css({ fontWeight: theme.typography.fontWeightBold, fontSize: theme.typography.body.fontSize }),

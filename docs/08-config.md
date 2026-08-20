@@ -70,6 +70,7 @@ Admin-only React page. Fields:
 - **Bedrock**: region, model id, max tool iterations, optional system prompt (empty → `agent.DefaultSystemPrompt` from `pkg/agent/system_prompt.go`, which enables act-on-the-live-UI behavior; an operator-set prompt fully replaces it).
 - **AWS credentials** (optional): access key id, secret access key — via `SecretInput` (shows "configured" once set).
 - **MCP servers**: repeatable rows `{ name, url, authHeader }` + a secret `Auth value` per row stored as `mcpSecret_<name>`.
+- **Branding** (optional, non-secret jsonData): `brandIcon` (base64 `data:image/*` URI or an image URL; upload converts a file ≤256KB to a data URI), `brandName`, `brandSubtitle`. Consumed **frontend-only** by `src/lib/branding.ts` (cached `GET /api/plugins/mcpagent-app/settings`) and rendered in the chat header, top-bar trigger, and FAB. `isSafeIconSrc` only allows `data:image/*`, `http(s):`, or `/`-relative sources.
 
 Save posts to `POST /api/plugins/mcpagent-app/settings` with `{ enabled, pinned, jsonData, secureJsonData }`, then reloads. Only non-empty secret inputs are included in `secureJsonData` (so unchanged secrets aren't overwritten with blanks).
 

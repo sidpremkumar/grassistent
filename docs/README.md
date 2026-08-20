@@ -20,6 +20,7 @@
 | [09-build-and-run.md](./09-build-and-run.md) | Dev-ex loop: build frontend + Go backend, run local Grafana 13.2, env forwarding, provisioning |
 | [10-roadmap.md](./10-roadmap.md) | Known gaps, not-yet-implemented, planned work |
 | [11-browser-tools.md](./11-browser-tools.md) | Live UI agency: browser-executed tools, pause/continue loop, confirmation gate |
+| [12-install-eks.md](./12-install-eks.md) | Deploy on self-hosted Grafana in EKS: IRSA/OIDC IAM (Terraform), headless env config, plugin install options, verify |
 
 ## Quick facts
 

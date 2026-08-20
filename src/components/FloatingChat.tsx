@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { ChatPanel } from './ChatPanel';
+import { Branding, isSafeIconSrc, loadBranding } from '../lib/branding';
 import { drawerVariants, fabVariants } from '../lib/motion';
 
 /**
@@ -29,6 +30,21 @@ export function FloatingChat() {
   const reduceMotion = useReducedMotion();
   const [open, setOpen] = useState(false);
   const [injected, setInjected] = useState(false);
+  const [branding, setBranding] = useState<Branding>({});
+
+  /* Load operator branding once (cached); drives the custom icon on the
+   * top-bar button and the FAB fallback. */
+  useEffect(() => {
+    let cancelled = false;
+    void loadBranding().then((b) => {
+      if (!cancelled) {
+        setBranding(b);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /* Toggle from either the injected top-bar button or the fallback FAB. */
   useEffect(() => {
@@ -71,6 +87,12 @@ export function FloatingChat() {
   useEffect(() => {
     const BTN_ID = 'mcpagent-topbar-trigger';
 
+    /* Custom icon (if configured + safe) renders as an <img>; otherwise the
+     * built-in inline SVG glyph. */
+    const innerHTML = isSafeIconSrc(branding.icon)
+      ? `<img src="${escapeAttr(branding.icon)}" alt="" width="18" height="18" style="display:block;object-fit:contain;border-radius:4px" />`
+      : triggerInnerHTML;
+
     /* Finds the top-bar search control; the button is inserted just before it so
      * it sits in the same right-aligned cluster as Search / Sign in. Grafana's
      * markup varies by version, so several selectors are tried in order. */
@@ -82,7 +104,12 @@ export function FloatingChat() {
       document.querySelector('[placeholder^="Search"]');
 
     const tryInject = () => {
-      if (document.getElementById(BTN_ID)) {
+      const existing = document.getElementById(BTN_ID);
+      if (existing) {
+        /* Keep the icon in sync if branding loaded after the button mounted. */
+        if (existing.innerHTML !== innerHTML) {
+          existing.innerHTML = innerHTML;
+        }
         setInjected(true);
         return;
       }
@@ -99,7 +126,7 @@ export function FloatingChat() {
       btn.setAttribute('aria-label', 'Open MCP Agent');
       btn.title = 'MCP Agent';
       btn.className = mcpTriggerClass;
-      btn.innerHTML = triggerInnerHTML;
+      btn.innerHTML = innerHTML;
       btn.addEventListener('click', () => window.dispatchEvent(new CustomEvent(TOGGLE_EVENT)));
       /* Insert immediately before the search cluster. */
       cell.parentElement.insertBefore(btn, cell);
@@ -110,7 +137,7 @@ export function FloatingChat() {
     const observer = new MutationObserver(() => tryInject());
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, []);
+  }, [branding.icon]);
 
   return (
     <>
@@ -146,7 +173,16 @@ export function FloatingChat() {
             aria-label="Open MCP Agent"
             data-testid="mcpagent-fab-button"
           >
-            <Icon name="comment-alt-share" size="lg" />
+            {isSafeIconSrc(branding.icon) ? (
+              <img
+                src={branding.icon}
+                alt=""
+                aria-hidden
+                style={{ width: 24, height: 24, objectFit: 'contain', borderRadius: 6 }}
+              />
+            ) : (
+              <Icon name="comment-alt-share" size="lg" />
+            )}
           </motion.button>
         </div>
       )}
@@ -159,6 +195,16 @@ export function FloatingChat() {
 const mcpTriggerClass = 'mcpagent-topbar-trigger-btn';
 const triggerInnerHTML =
   '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+
+/* Escapes a string for safe interpolation into an HTML attribute value (the
+ * top-bar button is built via innerHTML on a plain-DOM node). */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 /* Injected once: global style for the plain-DOM trigger button. */
 if (typeof document !== 'undefined' && !document.getElementById('mcpagent-trigger-style')) {

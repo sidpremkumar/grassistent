@@ -3,7 +3,7 @@ import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv, locationService } from '@grafana/runtime';
 import { Button, Field, FieldSet, IconButton, Input, SecretInput, useStyles2 } from '@grafana/ui';
-
+import { isSafeIconSrc } from '../lib/branding';
 /**
  * Admin configuration page for the MCP Agent plugin.
  *
@@ -24,6 +24,9 @@ type JsonData = {
   maxToolIterations?: number;
   systemPrompt?: string;
   mcpServers?: MCPServerForm[];
+  brandIcon?: string;
+  brandName?: string;
+  brandSubtitle?: string;
 };
 
 type SecureFields = Record<string, boolean>;
@@ -46,6 +49,12 @@ export function ConfigPage({ plugin }: Props) {
   const [systemPrompt, setSystemPrompt] = useState(jsonData.systemPrompt ?? '');
   const [servers, setServers] = useState<MCPServerForm[]>(jsonData.mcpServers ?? []);
 
+  /* Branding (optional): custom icon (base64 data URI or URL) + labels. */
+  const [brandIcon, setBrandIcon] = useState(jsonData.brandIcon ?? '');
+  const [brandName, setBrandName] = useState(jsonData.brandName ?? '');
+  const [brandSubtitle, setBrandSubtitle] = useState(jsonData.brandSubtitle ?? '');
+  const [iconError, setIconError] = useState('');
+
   /* Secret inputs: track pending values + whether each is already configured. */
   const [awsKey, setAwsKey] = useState('');
   const [awsSecret, setAwsSecret] = useState('');
@@ -56,6 +65,29 @@ export function ConfigPage({ plugin }: Props) {
   const removeServer = (idx: number) => setServers((s) => s.filter((_, i) => i !== idx));
   const patchServer = (idx: number, patch: Partial<MCPServerForm>) =>
     setServers((s) => s.map((srv, i) => (i === idx ? { ...srv, ...patch } : srv)));
+
+  /* Reads a chosen image file into a base64 data URI stored in jsonData, so the
+   * icon travels with the plugin settings (no external hosting needed). Capped
+   * at ~256KB to stay well under the settings payload limits. */
+  const MAX_ICON_BYTES = 256 * 1024;
+  const onIconFile = (file: File | undefined) => {
+    setIconError('');
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setIconError('Please choose an image file.');
+      return;
+    }
+    if (file.size > MAX_ICON_BYTES) {
+      setIconError('Image is too large (max 256KB). Use a smaller SVG/PNG.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setBrandIcon(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => setIconError('Could not read that file.');
+    reader.readAsDataURL(file);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -82,6 +114,9 @@ export function ConfigPage({ plugin }: Props) {
           maxToolIterations: Number(maxIter) || 12,
           systemPrompt,
           mcpServers: servers,
+          brandIcon: brandIcon.trim(),
+          brandName: brandName.trim(),
+          brandSubtitle: brandSubtitle.trim(),
         },
         secureJsonData,
       });
@@ -194,6 +229,74 @@ export function ConfigPage({ plugin }: Props) {
         </Button>
       </FieldSet>
 
+      <FieldSet label="Branding (optional)">
+        <p className={styles.hint}>
+          Customize the icon and labels shown in the chat panel header, the top-bar button, and the floating
+          button. Leave blank to use the defaults.
+        </p>
+        <Field
+          label="Icon"
+          description="Paste a base64 data URI (data:image/…) or an image URL, or upload a file (max 256KB, SVG/PNG)."
+        >
+          <div className={styles.iconRow}>
+            {isSafeIconSrc(brandIcon) && (
+              <span className={styles.iconPreview}>
+                <img src={brandIcon} alt="" aria-hidden />
+              </span>
+            )}
+            <Input
+              value={brandIcon}
+              placeholder="data:image/svg+xml;base64,… or https://…/logo.svg"
+              onChange={(e) => setBrandIcon(e.currentTarget.value)}
+              width={70}
+              data-testid="mcpagent-brand-icon"
+            />
+            <label className={styles.upload}>
+              Upload…
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => onIconFile(e.currentTarget.files?.[0])}
+                data-testid="mcpagent-brand-icon-file"
+              />
+            </label>
+            {brandIcon && (
+              <IconButton
+                name="trash-alt"
+                aria-label="Clear icon"
+                tooltip="Clear icon"
+                onClick={() => {
+                  setBrandIcon('');
+                  setIconError('');
+                }}
+              />
+            )}
+          </div>
+        </Field>
+        {iconError && <p className={styles.error}>{iconError}</p>}
+        <Field label="Name" description="Title shown in the panel header (default “MCP Agent”).">
+          <Input
+            value={brandName}
+            placeholder="MCP Agent"
+            onChange={(e) => setBrandName(e.currentTarget.value)}
+            width={40}
+            data-testid="mcpagent-brand-name"
+          />
+        </Field>
+        <Field
+          label="Subtitle"
+          description="Text under the name (default “Context-aware assistant”)."
+        >
+          <Input
+            value={brandSubtitle}
+            placeholder="Context-aware assistant"
+            onChange={(e) => setBrandSubtitle(e.currentTarget.value)}
+            width={40}
+            data-testid="mcpagent-brand-subtitle"
+          />
+        </Field>
+      </FieldSet>
+
       <div className={styles.actions}>
         <Button onClick={save} disabled={saving} data-testid="mcpagent-save">
           {saving ? 'Saving\u2026' : 'Save settings'}
@@ -209,6 +312,38 @@ export type ConfigPluginMeta = PluginMeta<AppPluginMeta<JsonData>>;
 const getStyles = (theme: GrafanaTheme2) => ({
   root: css({ maxWidth: '900px' }),
   hint: css({ color: theme.colors.text.secondary, marginBottom: theme.spacing(1) }),
+  error: css({ color: theme.colors.error.text, marginTop: theme.spacing(-1), marginBottom: theme.spacing(1) }),
+  iconRow: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(1),
+    flexWrap: 'wrap',
+  }),
+  iconPreview: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+    flexShrink: 0,
+    borderRadius: theme.shape.radius.default,
+    border: `1px solid ${theme.colors.border.weak}`,
+    background: theme.colors.background.secondary,
+    '& img': { width: 24, height: 24, objectFit: 'contain' },
+  }),
+  upload: css({
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: theme.spacing(0.75, 1.5),
+    borderRadius: theme.shape.radius.default,
+    border: `1px solid ${theme.colors.border.medium}`,
+    background: theme.colors.background.secondary,
+    color: theme.colors.text.primary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    cursor: 'pointer',
+    '&:hover': { background: theme.colors.action.hover },
+    '& input': { display: 'none' },
+  }),
   serverRow: css({
     display: 'flex',
     gap: theme.spacing(1),
