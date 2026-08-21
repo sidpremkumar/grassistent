@@ -25,7 +25,12 @@ const config = async (env: Record<string, unknown>): Promise<Configuration> => {
   const production = Boolean(env.production);
   const pkg = readJson('package.json');
   const pluginId = (readJson('src/plugin.json').id as string) ?? 'mcpagent-app';
-  const version = (pkg.version as string) ?? '0.0.0';
+  /*
+   * Release builds stamp the version from the git tag (see scripts/package.sh),
+   * so the packaged plugin.json can never drift from the tag it ships under.
+   * Local/dev builds fall back to package.json.
+   */
+  const version = process.env.PLUGIN_VERSION || (pkg.version as string) || '0.0.0';
 
   return {
     mode: production ? 'production' : 'development',

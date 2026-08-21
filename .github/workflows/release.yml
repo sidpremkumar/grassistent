@@ -34,7 +34,21 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
+      - name: Resolve version from tag
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="$(node -e "process.stdout.write(require('./package.json').version)")"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Packaging version ${VERSION}"
+
       - name: Package plugin
+        env:
+          PLUGIN_VERSION: ${{ steps.version.outputs.version }}
         run: npm run package
 
       - name: Upload build artifact

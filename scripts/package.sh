@@ -12,14 +12,30 @@
 #   GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=mcpagent-app
 #
 # Usage:
-#   ./scripts/package.sh            # build everything, emit dist-zip/<id>-<version>.zip
-#   SKIP_BUILD=1 ./scripts/package.sh   # zip whatever is already in dist/
+#   ./scripts/package.sh                       # build everything, emit dist-zip/<id>-<version>.zip
+#   SKIP_BUILD=1 ./scripts/package.sh          # zip whatever is already in dist/
+#   PLUGIN_VERSION=0.1.3 ./scripts/package.sh  # override the stamped version
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 PLUGIN_ID="$(node -e "process.stdout.write(require('./src/plugin.json').id)")"
-VERSION="$(node -e "process.stdout.write(require('./package.json').version)")"
+
+# Version resolution order:
+#   1. PLUGIN_VERSION env var (CI passes the git tag, minus the leading "v")
+#   2. an exact git tag on HEAD, e.g. v0.1.3 -> 0.1.3
+#   3. package.json version (local/dev builds)
+# This keeps the zip name, plugin.json version and release tag in lockstep.
+if [[ -z "${PLUGIN_VERSION:-}" ]]; then
+  GIT_TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+  if [[ -n "${GIT_TAG}" ]]; then
+    PLUGIN_VERSION="${GIT_TAG#v}"
+  else
+    PLUGIN_VERSION="$(node -e "process.stdout.write(require('./package.json').version)")"
+  fi
+fi
+export PLUGIN_VERSION
+VERSION="${PLUGIN_VERSION}"
 OUT_DIR="dist-zip"
 STAGE_DIR="${OUT_DIR}/${PLUGIN_ID}"
 ZIP_PATH="${OUT_DIR}/${PLUGIN_ID}-${VERSION}.zip"
