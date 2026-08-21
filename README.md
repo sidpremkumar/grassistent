@@ -1,6 +1,6 @@
 # Grafana MCP Agent
 
-An open-source Grafana **app plugin** that adds an AI chat agent to Grafana. The agent connects to any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server(s) you configure and can call their tools to investigate. When you open the chat, it **auto-prefills your question from the page you're viewing** — the dashboard, panel query, time range, or alert.
+An open-source Grafana **app plugin** that adds an AI chat agent to Grafana. The agent connects to any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server(s) you configure and can call their tools to investigate. It **knows the page you're viewing** — the dashboard, panel query, time range, or alert — and **suggests real follow-up questions** generated from your actual conversation, that page, and any guidance you've given it.
 
 The agent can also **act on the live page**: set the time range or variables, open Explore with queries it composes, open a panel editor, edit a panel's queries in place (with your confirmation), and hand control back to you mid-task with inline questions. See [docs/11-browser-tools.md](./docs/11-browser-tools.md).
 
@@ -18,7 +18,8 @@ Detailed docs live in [`docs/`](./docs/README.md). They are written primarily fo
 - [Backend](./docs/03-backend.md) — Go packages, SSE `/chat` handler, app lifecycle
 - [MCP client](./docs/04-mcp-client.md) — JSON-RPC-over-HTTP, handshake, tool namespacing
 - [Agent loop](./docs/05-agent-loop.md) — Bedrock ConverseStream tool-use loop
-- [Page context](./docs/06-page-context.md) — extraction + prefill
+- [Page context](./docs/06-page-context.md) — extraction + prompt enrichment
+- [Suggestions](./docs/13-suggestions.md) — model-generated follow-up chips, custom context
 - [Protocol](./docs/07-protocol.md) — `ChatRequest` / `AgentEvent` / SSE framing
 - [Config](./docs/08-config.md) — settings/secrets, config page
 - [Build & run](./docs/09-build-and-run.md) — dev-ex loop: build, local Grafana 13.2, provisioning
@@ -33,7 +34,7 @@ Detailed docs live in [`docs/`](./docs/README.md). They are written primarily fo
 │                          │  SSE   │                            │
 │  Chat UI (React +        │◀──────▶│  Agent loop:               │
 │  framer-motion)          │  POST  │   AWS Bedrock              │
-│  + page-context prefill  │        │   (ConverseStream)         │
+│  + page-context aware    │        │   (ConverseStream)         │
 │  + localStorage history  │        │   ↕ MCP tools (HTTP)       │
 └──────────────────────────┘        └──────────────┬─────────────┘
                                                     │ streamable-HTTP
@@ -58,7 +59,7 @@ The agent reads the current expression from page context (`sum(rate(prometheus_h
 
 ![Agent proposing a panel-query edit with an inline Allow/Deny confirmation](./docs/assets/before-suggestion.png)
 
-Once you allow it, the query is rewritten to `[5m]`, the panel preview updates automatically, and you click **Apply** to save. Below the chat, the agent also surfaces a context-aware suggested next action — e.g. *"Investigate what's happening on 'Checkout API' for the current time range and explain any anomalies."*
+Once you allow it, the query is rewritten to `[5m]`, the panel preview updates automatically, and you click **Apply** to save. Below the chat, the agent also surfaces model-generated follow-up chips based on what you just did — e.g. *"Compare the 5m rate to last week"* or *"Check if error rate moved with it"*.
 
 ![Panel query updated to 5m with a suggested follow-up action chip](./docs/assets/after-suggestion.png)
 
@@ -135,9 +136,11 @@ Two dev-only compose settings matter most:
 Frontend-only changes: rebuild + hard-reload the browser (`dist/` is mounted).
 Backend or `plugin.json` changes: rebuild, `docker compose restart`, re-enable.
 
-## Page-context prefill
+## Page context & suggestions
 
-`extractPageContext()` (async) reads Grafana runtime APIs (`getTemplateSrv`, `locationService`) and fetches the dashboard model from Grafana's backend API (`/api/dashboards/uid/<uid>`) to surface the title, panels, per-panel queries, and datasource, plus Explore pane state from the URL. `buildPrefill()` turns that into a suggested question, and the same context is sent to the backend so the agent knows what you're looking at. Everything is optional — no context still gives you a plain chat.
+`extractPageContext()` (async) reads Grafana runtime APIs (`getTemplateSrv`, `locationService`) and fetches the dashboard model from Grafana's backend API (`/api/dashboards/uid/<uid>`) to surface the title, panels, per-panel queries, and datasource, plus Explore pane state from the URL. That context is sent to the backend so the agent knows what you're looking at.
+
+Separately, once a turn settles the plugin asks its backend for **real follow-up suggestions**: the last ~10 messages, the page context, and any **custom context** you've saved are sent to `/resources/suggestions`, where a single tool-less Bedrock call returns 3–4 short prompts rendered as tappable chips. Nothing is ever pre-typed into the composer. Everything is optional — no context still gives you a plain chat. See [docs/13-suggestions.md](./docs/13-suggestions.md).
 
 ## License
 

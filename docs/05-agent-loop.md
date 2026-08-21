@@ -1,6 +1,7 @@
 # 05 — Agent loop
 
-`pkg/agent/agent.go` + `pkg/agent/helpers.go`. Runs a single user turn as a
+`pkg/agent/agent.go` + `pkg/agent/helpers.go` (plus `pkg/agent/suggest.go` for the
+separate suggestions call). Runs a single user turn as a
 bounded Bedrock **ConverseStream** tool-use loop, emitting `Event`s and streaming
 text deltas token-by-token.
 
@@ -87,8 +88,15 @@ stop reason.
     280-rune `preview` plus the full `output` capped at
     `maxUIOutputChars = 20000` (`capUIOutput`), rendered as collapsible JSON.
 
-## helpers.go
+## suggest.go (separate, non-loop path)
 
+`Agent.Suggest(ctx, history, contextText, customContext)` is **not** part of the
+tool-use loop: it makes one non-streaming `bedrock.Converse` call with **no
+`ToolConfig`**, its own system prompt, `MaxTokens: 400` / `Temperature: 0.4`, and
+parses a JSON array of follow-up prompts (capped at 4). It emits no `Event`s and
+never calls tools. See [13-suggestions.md](./13-suggestions.md).
+
+## helpers.go
 - `buildMessages` — history + current message to `[]brtypes.Message`.
 - `toolResultBlock(id, text, isError)` — a `ToolResultBlock` with success/error status.
 - `toJSONDocument(map)` / `documentToJSON(doc)` — bridge between Go maps/JSON and Bedrock `document.Interface` (`bedrockruntime/document.NewLazyDocument`).

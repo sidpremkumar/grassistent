@@ -5,7 +5,7 @@
 A Grafana **app plugin** (`type: app`, id `mcpagent-app`) that adds an AI chat agent to Grafana. The agent:
 
 1. Reads the current Grafana page context (dashboard/panel/alert/time range) in the browser.
-2. Offers a context-derived suggested question as a tappable chip (input is never pre-seeded).
+2. Offers model-generated follow-up questions as tappable chips, derived from the recent conversation, that page context, and optional user-provided custom context (input is never pre-seeded) — see [13](./13-suggestions.md).
 3. On send, streams the turn to the plugin's **Go backend**, which runs an agent loop on **AWS Bedrock** (ConverseStream API, token streaming).
 4. The loop calls tools exposed by one or more **HTTP MCP servers** the operator configured, and streams reasoning/tool-calls/answer back to the browser as Server-Sent Events.
 5. The loop can also **act on the live page** via frontend-executed browser tools (time range, variables, Explore, live panel-query edits) using a pause/continue protocol — see [11](./11-browser-tools.md).
@@ -32,10 +32,10 @@ src/                          # Frontend (React 19 + @grafana/ui 13)
     JsonBlock.tsx             # Collapsible, syntax-highlighted JSON viewer for tool
                               #   input/output payloads (copy-to-clipboard)
   lib/
-    protocol.ts               # ChatRequest / AgentEvent / PageContext types + SSE parse
-    chat-stream.ts            # POST /resources/chat and parse SSE stream
-    chat-store.ts             # localStorage-backed session persistence + titles
-    page-context.ts           # extractPageContext() (async) + buildPrefill()
+    protocol.ts               # ChatRequest / AgentEvent / PageContext / Suggestions types + SSE parse
+    chat-stream.ts            # POST /resources/chat (SSE) + /resources/suggestions (JSON)
+    chat-store.ts             # localStorage-backed session persistence + titles + custom context
+    page-context.ts           # extractPageContext() (async) + hasPageContext()
     motion.ts                 # framer-motion variants / springs
   plugin.json                 # Plugin manifest (preload: true)
   img/logo.svg
@@ -63,7 +63,7 @@ pkg/                          # Backend (Go)
 ## Request lifecycle (one chat turn)
 
 ```
-User types / accepts prefill in ChatPanel
+User types / taps a suggestion chip in ChatPanel
   -> useAgentChat.send(text, pageContext)
     -> streamChat() POST /api/plugins/mcpagent-app/resources/chat  (same-origin, Grafana session auth)
       -> [Go] resources.handleChat: decode ChatRequest, enrichWithContext()
@@ -76,6 +76,9 @@ User types / accepts prefill in ChatPanel
                else: emit {type:"done"} and return
       <- SSE frames: data: {AgentEvent}\n\n  (content, reasoning, tool_call, tool_result, status, done, error)
   <- useAgentChat patches ChatMessage state; ChatPanel re-renders with animation
+  -> once idle (debounced 400ms): fetchSuggestions() POST /resources/suggestions
+       -> [Go] resources.handleSuggestions -> Agent.Suggest (Converse, no tools)
+       <- {"suggestions":[...]}  rendered as tappable chips
 ```
 
 ## Current-state matrix
@@ -86,7 +89,8 @@ User types / accepts prefill in ChatPanel
 | Docked panel (pushes page, not overlay) | ✅ built | `FloatingChat.tsx` shrinks `.grafana-app`; page stays interactive |
 | Top-bar trigger next to Sign in | ✅ built (DOM-injected) | extension slots are allow-listed, so injected via MutationObserver; FAB fallback |
 | Chat history (localStorage) | ✅ built | `chat-store.ts`; session list + resume + delete |
-| Page-context extraction + suggestion chip | ✅ built (best-effort) | async; mount retry + URL-change re-extract; chip, never pre-seeded input; see [06](./06-page-context.md) |
+| Page-context extraction | ✅ built (best-effort) | async; mount retry + URL-change re-extract; see [06](./06-page-context.md) |
+| Model-generated suggestion chips | ✅ built | `/suggestions` + `Agent.Suggest`; last-10 messages + page + custom context; never pre-seeded input; see [13](./13-suggestions.md) |
 | Browser tools (live UI agency) | ✅ built + verified | pause/continue loop, Tier 1 URL-state + Tier 2 scene mutation, `ask_user`; see [11](./11-browser-tools.md) |
 | Confirmation gate for mutating tools | ✅ built | Allow / Always allow / Deny chips; `update_panel_query` gated |
 | SSE token streaming (typewriter) | ✅ built + verified | `ConverseStream` deltas ↔ `chat-stream.ts`; blinking caret while streaming |

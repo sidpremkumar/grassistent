@@ -28,7 +28,7 @@ Browser (untrusted)          Grafana server (trusted)              External
 ## Data flow (detailed)
 
 1. **Context capture** (browser): `extractPageContext()` (async) reads `getTemplateSrv()` (variables/time), `locationService` (URL), and fetches the dashboard model via `getBackendSrv().get('/api/dashboards/uid/<uid>')` for title/panels/queries/datasource (plus Explore pane state from the URL). Produces a `PageContext`.
-2. **Prefill** (browser): `buildPrefill(ctx)` derives a suggested question string; user may edit.
+2. **Suggestions** (browser → backend, separate call): once the turn is idle, `fetchSuggestions()` POSTs the last 10 messages + `PageContext` + the user's custom context to `/resources/suggestions`; `Agent.Suggest` runs a tool-less Bedrock `Converse` and returns 3–4 prompt chips. The user may tap one or type freely. See [13](./13-suggestions.md).
 3. **Send** (browser): `useAgentChat.send()` builds a `ChatRequest` `{ sessionId, message, history, pageContext }` and calls `streamChat()`.
 4. **Enrichment** (backend): `enrichWithContext()` prepends a compact `[Grafana page context] ... [User question] ...` preamble to the message. This keeps provider-specific prompt shaping on the backend, not hard-coded in the UI.
 5. **Tool discovery** (backend): `agent.collectTools()` initializes each configured MCP client and lists its tools, building a Bedrock `ToolConfiguration`. Tool names are namespaced `"<server>__<tool>"` to avoid collisions.

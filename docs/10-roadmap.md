@@ -9,7 +9,8 @@ Authoritative list of what is **not** done or is partial. Update as things land.
 - **Local run + provisioning**: Grafana 13.2 via docker-compose on port 3001; TestData + a real self-scraping Prometheus (`local-prom`, host port 9091) + sample dashboard (2 TestData panels, 1 real PromQL panel) provisioned from `provisioning/`. Requires `GF_PLUGINS_FORWARD_HOST_ENV_VARS`.
 - **Docked panel UI**: chat pushes the page aside (not overlay); DOM-injected top-bar trigger with FAB fallback.
 - **Chat history**: client-side localStorage sessions with resume/delete.
-- **Dashboard-level context**: `extractPageContext` fetches the dashboard model (title, panels + ids, queries, datasource as `uid (type)`); mount retry + re-extract on URL change; suggestion chip instead of pre-seeded input.
+- **Dashboard-level context**: `extractPageContext` fetches the dashboard model (title, panels + ids, queries, datasource as `uid (type)`); mount retry + re-extract on URL change; suggestion chips instead of pre-seeded input.
+- **Model-generated suggestions**: `/resources/suggestions` + `Agent.Suggest` (tool-less `Converse`) turn the last ~10 messages + page context + user "custom context" into 3–4 follow-up chips, replacing the old static `buildPrefill` string. Debounced, idle-only, abort-on-supersede; failures degrade to no chips. See [13-suggestions.md](./13-suggestions.md).
 - **Browser tools (live UI agency)**: pause/continue loop with continuation tokens; Tier 1 URL-state tools + Tier 2 `update_panel_query` (live scene mutation, honest failure on non-expr datasources) + `ask_user`; confirmation gate (Allow / Always allow / Deny) for mutating tools; post-action page-context observation. E2E verified against real Bedrock. See [11-browser-tools.md](./11-browser-tools.md).
 - **Default system prompt**: act-don't-instruct guidance, datasource-specific query fields, testdata honesty (`pkg/agent/system_prompt.go`; operator override still wins).
 - **Context safety**: tool count (`maxTools`) and tool-result size (`capResult`) bounded; browser tools exempt from `maxTools` cap; continuation rounds capped both sides.
@@ -26,7 +27,8 @@ Authoritative list of what is **not** done or is partial. Update as things land.
 - **`tools/list` caching / pagination**: re-listed every turn (including on every continuation resume); single-response assumed.
 - **Non-text MCP content**: only `text` result blocks are forwarded to the model (images/resources dropped).
 - **Plugin signing / distribution**: dev runs unsigned via env allowlist.
-- **Tests / CI**: Go unit test for the continuation codec only; no frontend tests or CI workflow committed.
+- **Suggestion caching / evaluation**: suggestions are regenerated on every settle and navigation (no cache), and nothing asserts their usefulness beyond shape parsing. The user's custom context steers suggestions only — it is not injected into the chat turn itself.
+- **Tests / CI**: Go unit tests for the continuation codec and the suggestion parser only; no frontend tests or CI workflow committed.
 
 ## Partial / caveats
 

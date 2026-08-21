@@ -35,6 +35,11 @@ server's tools are advertised to the model — names are matched exactly against
 the server's advertised (pre-namespacing) tool names; anything not listed is
 never sent to Bedrock. Empty/omitted exposes everything.
 
+> Not to be confused with the end-user **custom context** used for suggestions
+> (`mcpagent.customContext.v1` in the browser's localStorage): that is per-user,
+> client-side, and only shapes suggestion chips. `MCPServerConfig.Context` here is
+> operator-set and shapes the chat system prompt. See [13](./13-suggestions.md).
+
 `defaultSettings()` supplies defaults; `loadSettings` re-applies defaults for
 empty/invalid fields.
 

@@ -6,7 +6,7 @@ Grafana plugin backend managed by the SDK (`grafana-plugin-sdk-go` v0.251.0). En
 
 - `pkg/plugin` — app instance, settings/secrets, resource (HTTP/SSE) handlers.
 - `pkg/mcp` — MCP HTTP client. See [04-mcp-client.md](./04-mcp-client.md).
-- `pkg/agent` — Bedrock ConverseStream tool loop. See [05-agent-loop.md](./05-agent-loop.md).
+- `pkg/agent` — Bedrock ConverseStream tool loop. See [05-agent-loop.md](./05-agent-loop.md). Also `suggest.go`: a tool-less `Converse` call for suggestions ([13](./13-suggestions.md)).
 
 ## App instance — `pkg/plugin/app.go`
 

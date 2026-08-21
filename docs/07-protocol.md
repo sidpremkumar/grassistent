@@ -1,6 +1,6 @@
 # 07 — Protocol (wire contracts)
 
-Defined in `src/lib/protocol.ts` (frontend) and mirrored by `pkg/agent/Event` + `pkg/plugin/resources.chatRequest` (backend). Keep both sides in sync.
+Defined in `src/lib/protocol.ts` (frontend) and mirrored by `pkg/agent/Event` + `pkg/plugin/resources.{chatRequest,suggestRequest}` (backend). Keep both sides in sync.
 
 ## Frontend → Backend: `ChatRequest`
 
@@ -68,8 +68,39 @@ type AgentEvent =
 - Exactly one terminal event (`done`, `error`, or `paused`) per stream under normal operation. A logical *turn* may span several streams chained by continuations.
 - `chat-stream.ts` also calls `onDone`/`onError` on stream end/abort so the UI never hangs even if a terminal event is missing.
 
-## Backend → Frontend mapping
+## Suggestions: `SuggestionsRequest` / `SuggestionsResponse`
 
+`POST /api/plugins/mcpagent-app/resources/suggestions`, JSON in / JSON out (**not** SSE).
+
+```ts
+type SuggestionsRequest = {
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;  // oldest first; frontend caps at last 10
+  pageContext?: PageContext;
+  customContext?: string;          // user-provided guidance, persisted client-side
+};
+
+type SuggestionsResponse = { suggestions: string[] };
+```
+
+Backend structs (`resources.go`):
+```go
+type suggestRequest struct {
+  History       []agent.Turn `json:"history"`
+  PageContext   *pageContext `json:"pageContext"`
+  CustomContext string       `json:"customContext"`
+}
+type suggestResponse struct {
+  Suggestions []string `json:"suggestions"`
+}
+```
+
+- **Never errors from the client's perspective**: all failure paths return HTTP 200 with `{"suggestions":[]}`. `suggestions` is always an array, never `null`.
+- At most **4** suggestions (`maxSuggestions`).
+- `fetchSuggestions()` is abortable and resolves to `[]` on network failure/abort.
+
+See [13-suggestions.md](./13-suggestions.md).
+
+## Backend → Frontend mapping
 `pkg/agent/Event` is emitted with `json` tags matching the `AgentEvent` fields. Note the Go struct is a single flat type with `omitempty`; only the relevant fields are populated per event type. The frontend discriminates on `type`.
 
 ## Versioning
