@@ -1,6 +1,6 @@
 {
   "name": "grafana-mcp-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An open-source Grafana app plugin: a chat agent that connects to any MCP server(s) and auto-prefills your question from the page you're viewing.",
   "scripts": {
     "build": "webpack -c ./webpack.config.ts --env production",
