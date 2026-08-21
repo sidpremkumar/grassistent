@@ -28,9 +28,14 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Pr
   const styles = useStyles2(getStyles);
   const reduceMotion = useReducedMotion();
 
-  /* Auto-expand while thinking, auto-collapse once the answer starts. */
+  const failed = useMemo(() => toolCalls.filter((tc) => tc.status === 'error'), [toolCalls]);
+
+  /* Auto-expand while thinking, auto-collapse once the answer starts — EXCEPT
+   * when a step failed. Collapsing a failure hides it behind a confident answer
+   * ("I updated the panel") with no other signal that the action did not
+   * actually happen, so failures stay expanded until the user closes them. */
   const [manual, setManual] = useState<boolean | null>(null);
-  const autoOpen = streaming && !hasAnswer;
+  const autoOpen = (streaming && !hasAnswer) || failed.length > 0;
   const open = manual ?? autoOpen;
 
   useEffect(() => {
@@ -42,6 +47,9 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Pr
 
   const summary = useMemo(() => {
     const steps = toolCalls.length;
+    if (failed.length > 0) {
+      return `${failed.length} of ${steps} step${steps === 1 ? '' : 's'} failed`;
+    }
     if (streaming && !hasAnswer) {
       return 'Thinking';
     }
@@ -49,13 +57,15 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Pr
       return 'Thought for a moment';
     }
     return `Worked through ${steps} step${steps === 1 ? '' : 's'}`;
-  }, [streaming, hasAnswer, toolCalls.length]);
+  }, [streaming, hasAnswer, toolCalls.length, failed.length]);
 
   const active = streaming && !hasAnswer;
 
   if (!reasoning && toolCalls.length === 0 && !active) {
     return null;
   }
+
+  const summaryClass = active ? styles.shimmer : failed.length > 0 ? styles.summaryError : styles.summary;
 
   return (
     <div className={styles.root} data-testid="mcpagent-thinking">
@@ -73,9 +83,27 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Pr
         >
           <Icon name="angle-right" size="sm" />
         </motion.span>
-        <span className={active ? styles.shimmer : styles.summary}>{summary}</span>
+        {failed.length > 0 && !active && (
+          <span className={styles.headerWarnIcon} data-testid="mcpagent-thinking-failed-icon">
+            <Icon name="exclamation-triangle" size="sm" />
+          </span>
+        )}
+        <span className={summaryClass}>{summary}</span>
         {active && <PulseDot />}
       </button>
+
+      {/* A failed action is not something the user should have to expand a
+        * collapsed trace to discover, especially since the model's prose often
+        * claims success — name the failing tools inline. */}
+      {failed.length > 0 && !active && (
+        <div className={styles.failureBanner} data-testid="mcpagent-thinking-failure-banner">
+          <span className={styles.failureNames}>{failed.map((tc) => tc.name).join(', ')}</span>
+          <span>
+            {failed.length === 1 ? 'did not complete' : 'did not complete'} — the page may not reflect what the
+            answer describes.
+          </span>
+        </div>
+      )}
 
       <AnimatePresence initial={false}>
         {open && (
@@ -113,11 +141,21 @@ function ToolStep({
   styles: ReturnType<typeof getStyles>;
   reduceMotion: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  /* Failed steps open by default: the error text is the only place that says
+   * what actually went wrong on the page. */
+  const [open, setOpen] = useState(tool.status === 'error');
   const hasInput = tool.input !== undefined && tool.input !== null;
   const output = tool.output ?? tool.preview;
   const hasDetail = hasInput || Boolean(output) || Boolean(tool.error);
   const running = tool.status === 'running';
+
+  /* Steps are created as "running" and only flip to "error" later, so the
+   * initial state above misses live failures — open on transition too. */
+  useEffect(() => {
+    if (tool.status === 'error') {
+      setOpen(true);
+    }
+  }, [tool.status]);
 
   return (
     <motion.div
@@ -221,6 +259,26 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   chevron: css({ display: 'inline-flex', color: theme.colors.text.disabled }),
   summary: css({ color: theme.colors.text.secondary }),
+  summaryError: css({ color: theme.colors.error.text, fontWeight: theme.typography.fontWeightMedium }),
+  headerWarnIcon: css({ display: 'inline-flex', color: theme.colors.error.text }),
+  failureBanner: css({
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: theme.spacing(0.5),
+    margin: theme.spacing(0.5, 0, 0, 3),
+    padding: theme.spacing(0.5, 1),
+    borderLeft: `2px solid ${theme.colors.error.border}`,
+    borderRadius: theme.shape.radius.default,
+    background: theme.colors.error.transparent,
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    lineHeight: theme.typography.bodySmall.lineHeight,
+  }),
+  failureNames: css({
+    fontFamily: theme.typography.fontFamilyMonospace,
+    color: theme.colors.error.text,
+  }),
   shimmer: css({
     fontWeight: theme.typography.fontWeightMedium,
     background: `linear-gradient(90deg, ${theme.colors.text.disabled} 0%, ${theme.colors.text.primary} 20%, ${theme.colors.text.disabled} 40%)`,

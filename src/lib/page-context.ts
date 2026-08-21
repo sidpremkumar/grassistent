@@ -2,7 +2,7 @@ import { getBackendSrv, getTemplateSrv, locationService } from '@grafana/runtime
 import { PageContext } from './protocol';
 import { describeDatasourceInfo, describeDatasourceUid, listDatasources, resolveDatasource } from './datasources';
 import { recentAlerts } from './error-log';
-import { collectPanelErrors } from './scene-graph';
+import { collectLivePanelQueries, collectPanelErrors } from './scene-graph';
 
 /**
  * Extracts context about the Grafana page the user is currently viewing so the
@@ -91,17 +91,30 @@ async function readDashboard(): Promise<{
       .filter((p) => Boolean(p.title))
       .map((p) => (p.id !== undefined ? `${p.title} (id ${p.id})` : `${p.title}`));
 
+    /* The saved model is stale with respect to in-place tool edits, so prefer
+     * the live scene's queries wherever we can read them. Without this the
+     * agent observes the pre-edit query after its own mutation and concludes
+     * (wrongly) that nothing needs fixing. */
+    const liveByPanelId = collectLivePanelQueries();
+
     const queries: string[] = [];
     let datasource: string | undefined;
     for (const p of panels) {
-      const ds = describeDatasource(p.datasource);
+      const live = p.id !== undefined ? liveByPanelId.get(p.id) : undefined;
+      const ds = live?.datasourceUid
+        ? describeDatasourceUid({ uidOrName: live.datasourceUid })
+        : describeDatasource(p.datasource);
       if (ds && !datasource) {
         datasource = ds;
       }
-      for (const t of p.targets ?? []) {
+      const targets = live?.queries ?? p.targets ?? [];
+      /* Flag unsaved divergence explicitly: the model must know the dashboard
+       * on disk and the panel on screen no longer agree. */
+      const liveMarker = live && !sameQueries(live.queries, p.targets ?? []) ? ' LIVE-UNSAVED' : '';
+      for (const t of targets) {
         const q = summarizeQuery(t);
         if (q) {
-          const label = p.title ? `[${p.title}${p.id !== undefined ? ` id=${p.id}` : ''}] ` : '';
+          const label = p.title ? `[${p.title}${p.id !== undefined ? ` id=${p.id}` : ''}${liveMarker}] ` : '';
           queries.push(`${label}${q}`);
         }
       }
@@ -117,6 +130,19 @@ async function readDashboard(): Promise<{
   } catch {
     return { dashboardUid: uid };
   }
+}
+
+/** Compares two query arrays by their expression-bearing fields only. */
+function sameQueries(
+  a: Array<Record<string, unknown>>,
+  b: Array<Record<string, unknown>>,
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const key = (q: Record<string, unknown>): string =>
+    JSON.stringify([q.refId, q.expr, q.query, q.rawSql, q.queryType]);
+  return a.every((q, i) => key(q) === key(b[i]));
 }
 
 /** "uid (type)" so the agent can recognize e.g. testdata datasources. */

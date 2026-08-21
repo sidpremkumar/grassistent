@@ -10,7 +10,7 @@ import { getBackendSrv } from '@grafana/runtime';
  * built-in Grafana glyph.
  */
 export type Branding = {
-  /** Data URI or URL for a custom icon shown in the header, top-bar button, and FAB. */
+  /** Data URI or URL for a custom icon shown in the chat header and the top-bar trigger. */
   icon?: string;
   /** Product name shown in the panel header (default "MCP Agent"). */
   name?: string;

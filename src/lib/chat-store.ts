@@ -90,11 +90,16 @@ export function saveStore(store: Store): void {
 }
 
 const CUSTOM_CONTEXT_KEY = 'mcpagent.customContext.v1';
+/** In-page notification channel; `storage` only fires in *other* tabs. */
+const CUSTOM_CONTEXT_EVENT = 'mcpagent:customContext';
 
 /**
- * Loads the user's free-text custom context — guidance they've given us to
- * steer suggestions (e.g. "I own the checkout service; focus on latency").
- * Stored separately from chat history since it spans all sessions.
+ * Loads the user's standing preferences — free-text guidance that steers
+ * suggestions (e.g. "I own the checkout service; focus on latency").
+ *
+ * Deliberately stored outside the chat blob and keyed on its own: this is a
+ * long-lived user preference, so it must survive reloads, new chats, deleting
+ * history, and switching between threads.
  */
 export function loadCustomContext(): string {
   if (typeof localStorage === 'undefined') {
@@ -107,7 +112,12 @@ export function loadCustomContext(): string {
   }
 }
 
-/** Persists the user's custom context. Best-effort; ignores quota errors. */
+/**
+ * Persists the preference and announces it, so every mounted panel (the drawer
+ * can be torn down and rebuilt, and more than one surface may be live) shows
+ * the same value instead of a stale copy from its own mount. Best-effort;
+ * ignores quota errors.
+ */
 export function saveCustomContext(value: string): void {
   if (typeof localStorage === 'undefined') {
     return;
@@ -117,6 +127,37 @@ export function saveCustomContext(value: string): void {
   } catch {
     /* quota exceeded or unavailable */
   }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<string>(CUSTOM_CONTEXT_EVENT, { detail: value }));
+  }
+}
+
+/**
+ * Subscribes to preference changes from anywhere else — another panel instance
+ * in this tab (custom event) or another Grafana tab (native `storage` event).
+ * Returns an unsubscribe function.
+ */
+export function subscribeCustomContext(args: { onChange: (value: string) => void }): () => void {
+  if (typeof window === 'undefined') {
+    return () => undefined;
+  }
+  const onLocal = (e: Event) => {
+    const detail = (e as CustomEvent<string>).detail;
+    args.onChange(typeof detail === 'string' ? detail : loadCustomContext());
+  };
+  const onStorage = (e: StorageEvent) => {
+    /* key === null means the whole store was cleared. */
+    if (e.key !== null && e.key !== CUSTOM_CONTEXT_KEY) {
+      return;
+    }
+    args.onChange(e.key === null ? '' : e.newValue ?? '');
+  };
+  window.addEventListener(CUSTOM_CONTEXT_EVENT, onLocal);
+  window.addEventListener('storage', onStorage);
+  return () => {
+    window.removeEventListener(CUSTOM_CONTEXT_EVENT, onLocal);
+    window.removeEventListener('storage', onStorage);
+  };
 }
 
 const AUTO_ALLOW_KEY = 'mcpagent.autoAllow.v2';

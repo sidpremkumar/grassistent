@@ -29,7 +29,12 @@ func TestParseSuggestions(t *testing.T) {
 		{
 			name: "caps at maxSuggestions",
 			raw:  `["1","2","3","4","5","6"]`,
-			want: []string{"1", "2", "3", "4"},
+			want: []string{"1", "2"},
+		},
+		{
+			name: "empty array yields nil",
+			raw:  `[]`,
+			want: nil,
 		},
 		{
 			name: "no array yields nil",

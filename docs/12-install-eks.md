@@ -377,7 +377,7 @@ Then open Grafana in a browser and click **MCP Agent** in the top bar.
 | Backend won't start | arch mismatch | node arch vs `gpx_mcpagent_linux_<arch>`; check `kubectl logs` for the plugin |
 | `AccessDeniedException` from Bedrock | IAM policy too narrow / model not enabled | add the model's ARN to `bedrock_model_arns`; enable model access in the Bedrock console for the region |
 | `ResourceNotFoundException` | retired/typo model id | use a current inference-profile id |
-| Chat button missing | pre-`singleTopNav` bar | confirm feature toggle; hard-reload; a floating button is the fallback |
+| Chat button missing | pre-`singleTopNav` bar | confirm feature toggle; hard-reload; `⌘⇧A` / `Ctrl+Shift+A` opens the chat regardless |
 | MCP init fails | URL unreachable from the pod / bad auth | verify egress + `MCPAGENT_MCP_SECRET_<NAME>` |
 
 ---

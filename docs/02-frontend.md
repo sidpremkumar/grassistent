@@ -11,13 +11,13 @@ export const plugin = new AppPlugin<{}>()
   .setRootPage(App)                       // pages/App.tsx -> AppPage
   .addConfigPage({ title: 'Configuration', icon: 'cog', body: ConfigPage, id: 'configuration' });
 
-mountFloatingChat();                      // creates a <div> in <body>, renders <FloatingChat/>
+mountTopBarChat();                        // creates a <div> in <body>, renders <TopBarChat/>
 ```
 
 - **Root page**: `pages/App.tsx` renders `AppPage` (nav item "MCP Agent").
 - **Config page**: `pages/ConfigPage.tsx` (admin only). See [08-config.md](./08-config.md).
 - **Global chat**: `module.tsx` runs on **every page** because `plugin.json` sets
-  `"preload": true`. It mounts `FloatingChat` into a body-attached root via
+  `"preload": true`. It mounts `TopBarChat` into a body-attached root via
   `createRoot`, guarded against double-mounting.
 
 ### Why not an extension point?
@@ -28,23 +28,33 @@ and `extension-sidebar/v0-alpha` slots to an internal plugin allow-list
 registered component/link never renders there. Hence the DOM-injection approach
 below. `plugin.json` `extensions.addedLinks`/`addedComponents` are left empty.
 
-## Global entry — `components/FloatingChat.tsx`
+## Global entry — `components/TopBarChat.tsx`
 
 Responsibilities:
 
-1. **Top-bar trigger injection.** A `MutationObserver` on `document.body` finds
-   the top-bar search control (tries `data-testid`, `aria-label`, placeholder
-   selectors) and inserts a gradient button just before that cluster, so it sits
-   next to Search / Sign in. Re-runs on Grafana's chrome re-renders. Clicking it
-   dispatches a `mcpagent:toggle` window event.
+1. **One trigger, in the top nav toolbar.** A `MutationObserver` on
+   `document.body` keeps a `display: contents` host node appended to
+   `[data-testid="data-testid Nav toolbar"]` (fallback: the command-palette
+   trigger's parent) — only toolbar-scoped anchors are used, since a generic
+   `input[placeholder^="Search"]` match lands in page content. `TopBarTrigger`
+   is rendered into it with `createPortal`, so it is a real React child (theme,
+   Emotion, framer-motion) rather than `innerHTML`. Grafana re-renders its
+   chrome on navigation; the *same* host element is re-appended, so the portal's
+   content — and chat state — survives.
 2. **Docked panel that pushes the page.** When open, it sets
    `padding-right: <PANEL_WIDTH>px` on `.grafana-app` (with a slide transition),
    shrinking the app content, and renders the chat as a `position: fixed` right
    column. **No backdrop** — the page stays fully interactive so the agent can
    help edit panels/queries. Restores padding on close/unmount.
-3. **Fallback FAB.** If the search anchor can't be found, a floating action
-   button is rendered instead so the chat is always reachable.
-4. `Esc` closes the panel.
+3. **Keyboard**: `⌘⇧A` / `Ctrl+Shift+A` toggles from anywhere, `Esc` closes.
+
+## Trigger icon — `components/TopBarTrigger.tsx`
+
+Quiet glass square at rest (so it reads as native chrome), fading into the chat
+panel's primary gradient on hover/open with a glow, a one-shot specular sheen
+sweep, and a "live" dot while a session is open. A safe operator `brandIcon`
+replaces the built-in bubble+sparkle glyph. Motion comes from
+`triggerVariants` and is skipped under `prefers-reduced-motion`.
 
 ## Chat surface — `components/ChatPanel.tsx`
 
@@ -61,8 +71,9 @@ The reusable chat surface. Responsibilities:
   backend for model-generated follow-up prompts (`fetchSuggestions`, debounced
   400ms, idle-only, abort-on-supersede) and renders them as tappable dashed chips
   above the composer — the input is never pre-seeded; tapping a chip fills it.
-  A `Custom context` disclosure below lets the user persist free-text guidance
-  that steers those suggestions. See [13](./13-suggestions.md).
+  A `Steer suggestions` disclosure below lets the user persist standing
+  preferences that shape those suggestions — one value across all chats,
+  reloads, and tabs (`lib/use-custom-context.ts`). See [13](./13-suggestions.md).
 - **Interaction chips**: when a browser tool needs the human (`ask_user`
   question options, or the Allow / Always allow / Deny confirmation gate for
   mutating tools), `useAgentChat.interaction` renders as an inline card above
@@ -96,8 +107,12 @@ The reusable chat surface. Responsibilities:
 - `ChatSession = { id, title, createdAt, updatedAt, messages }`.
 - `loadStore` / `saveStore` (trims to 50 most-recent), `newSession`,
   `deriveTitle`. All best-effort and corruption-tolerant.
-- `loadCustomContext` / `saveCustomContext` keep the user's suggestion guidance
-  under a separate key `mcpagent.customContext.v1` (spans all sessions).
+- `loadCustomContext` / `saveCustomContext` / `subscribeCustomContext` keep the
+  user's suggestion preferences under a separate key
+  `mcpagent.customContext.v1` (spans all sessions; unaffected by clearing chat
+  history). `saveCustomContext` broadcasts a `mcpagent:customContext` event so
+  other mounted panels stay in sync; cross-tab sync rides the native `storage`
+  event. `lib/use-custom-context.ts` wraps all three for components.
 
 ## State machine — `components/use-agent-chat.ts`
 
@@ -147,7 +162,7 @@ type ChatMessage = {
 Centralized framer-motion tokens for a cohesive feel:
 - `spring` / `springFast`: spring transitions (no linear tweens).
 - `messageVariants`, `chipVariants`, `contextVariants`, `pageVariants`,
-  `drawerVariants`, `backdropVariants`, `fabVariants`, `popoverVariants`,
+  `drawerVariants`, `backdropVariants`, `triggerVariants`, `popoverVariants`,
   `thinkingPulse`.
 - All animated components honor `useReducedMotion()`.
 

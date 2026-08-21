@@ -118,15 +118,25 @@ blank-dropping, capping, no-array, malformed).
   - While a request is in flight, `Thinking of suggestions…` renders next to the
     custom-context toggle.
 
-### Custom context (user-provided guidance)
+### Steer suggestions (standing user preference)
 
-A free-text field under the composer behind a `Custom context` disclosure
+A free-text field under the composer behind a `Steer suggestions` disclosure
 (`data-testid="mcpagent-customcontext-toggle"` / `-input`). The toggle label
-gets a `•` marker when non-empty.
+gets a `•` marker when non-empty and starts **expanded** when a preference is
+already saved. The label deliberately avoids "custom context" so it isn't
+mistaken for the operator-level context set via Helm/env.
 
-- Persisted by `lib/chat-store.ts` `loadCustomContext()` / `saveCustomContext()`
-  under its own key **`mcpagent.customContext.v1`** — it spans all sessions,
-  unlike chat history under `mcpagent.chat.v1`.
+- Owned by `lib/use-custom-context.ts` (`useCustomContext()`), backed by
+  `chat-store.ts` `loadCustomContext()` / `saveCustomContext()` /
+  `subscribeCustomContext()` under key **`mcpagent.customContext.v1`**.
+- **Consistency guarantees** — the value is the same regardless of surface:
+  - survives page reloads and Grafana navigations (localStorage, own key);
+  - survives the drawer closing (which unmounts `ChatPanel` entirely);
+  - is shared across chat sessions, and is untouched by New chat / deleting
+    history (it is *not* inside the `mcpagent.chat.v1` blob);
+  - propagates live to any other mounted panel in the tab via a
+    `mcpagent:customContext` `CustomEvent`, and to other Grafana tabs via the
+    native `storage` event.
 - Sent as `customContext` on every suggestions request; editing it re-triggers
   generation.
 

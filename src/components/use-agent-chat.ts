@@ -53,6 +53,35 @@ const nextId = (): string => `${Date.now()}-${idCounter++}`;
 /** Safety cap on continuation round-trips within one logical user turn. */
 const MAX_CONTINUATIONS = 12;
 
+/** Per-tool-error length cap in the replayed transcript, to bound prompt size. */
+const HISTORY_ERROR_MAX = 400;
+
+/**
+ * Renders a message for the backend transcript, appending a note for any tool
+ * call that failed.
+ *
+ * The wire format carries plain text only, so without this a prior turn where
+ * `update_panel_query` errored looks — to the model — like a turn where it
+ * successfully updated the panel and said so. That is exactly how a false claim
+ * ("I've switched the datasource") survives into later turns.
+ */
+function withToolOutcomes(message: ChatMessage): string {
+  const failed = message.toolCalls.filter((tc) => tc.status === 'error');
+  if (failed.length === 0) {
+    return message.content;
+  }
+  const notes = failed
+    .map((tc) => {
+      const reason = (tc.error ?? 'failed').slice(0, HISTORY_ERROR_MAX);
+      return `- ${tc.name}: ${reason}`;
+    })
+    .join('\n');
+  return (
+    `${message.content}\n\n[system note: these tool calls FAILED in that turn, so any claim above that ` +
+    `the page changed is wrong — correct it if the user follows up:\n${notes}]`
+  ).trim();
+}
+
 /**
  * useAgentChat owns conversation state and the SSE lifecycle for one session,
  * including the pause/execute/continue loop for browser tools: when the
@@ -100,9 +129,13 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
       if (!text.trim() || busy) {
         return;
       }
+      /* History is text-only over the wire, so a failed action in a previous
+       * turn would be invisible next turn — the model would only see its own
+       * (possibly false) prose claim and happily reaffirm it. Fold failed tool
+       * calls into the transcript so it can correct itself instead. */
       const history = messages
-        .filter((m) => m.content.trim().length > 0)
-        .map((m) => ({ role: m.role, content: m.content }));
+        .filter((m) => m.content.trim().length > 0 || m.toolCalls.some((tc) => tc.status === 'error'))
+        .map((m) => ({ role: m.role, content: withToolOutcomes(m) }));
 
       const userMsg: ChatMessage = {
         id: nextId(),
@@ -227,9 +260,12 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
               }));
               break;
             case 'error':
+              /* Never discard a backend error just because prose already
+               * streamed: `m.content || ...` used to drop it entirely, which is
+               * how a confident answer survived a failed turn. */
               patchAssistant((m) => ({
                 ...m,
-                content: m.content || `Error: ${event.error}`,
+                content: m.content ? `${m.content}\n\n_Error: ${event.error}_` : `Error: ${event.error}`,
                 streaming: false,
                 status: undefined,
               }));
@@ -251,7 +287,19 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
           if (streamFailed) {
             patchAssistant((m) => ({
               ...m,
-              content: m.content || 'Error: agent backend stream failed',
+              content: m.content
+                ? `${m.content}\n\n_Error: agent backend stream failed_`
+                : 'Error: agent backend stream failed',
+              streaming: false,
+              status: undefined,
+            }));
+          } else if (!continuation && pendingCalls.length > 0 && !controller.signal.aborted) {
+            /* The turn asked for page actions but we never received the resume
+             * token, so NONE of them ran. Silently returning here made the
+             * assistant's "I've updated the panel" the only thing on screen. */
+            patchAssistant((m) => ({
+              ...m,
+              content: `${m.content}\n\n_The page actions above were not performed (the agent stream ended without a resume token), so nothing on the page changed. Please retry._`,
               streaming: false,
               status: undefined,
             }));

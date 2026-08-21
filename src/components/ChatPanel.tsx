@@ -16,12 +16,11 @@ import {
   ChatSession,
   clearAutoAllow,
   deriveTitle,
-  loadCustomContext,
   loadStore,
   newSession,
-  saveCustomContext,
   saveStore,
 } from '../lib/chat-store';
+import { useCustomContext } from '../lib/use-custom-context';
 
 /**
  * ChatPanel is the reusable chat surface used inside the slide-in drawer. It:
@@ -93,10 +92,12 @@ export function ChatPanel({ onClose }: Props) {
     items: [],
   });
   const [suggesting, setSuggesting] = useState(false);
-  /* Free-text guidance the user gives us to steer suggestions; persisted across
-   * sessions. Edited via an inline disclosure below the composer. */
-  const [customContext, setCustomContext] = useState<string>(() => loadCustomContext());
-  const [customContextOpen, setCustomContextOpen] = useState(false);
+  /* Standing user preference that steers suggestions. Owned by a hook so it is
+   * identical across chats, drawer open/close cycles, reloads, and tabs. */
+  const { value: customContext, setValue: setCustomContext } = useCustomContext();
+  const [customContextOpen, setCustomContextOpen] = useState<boolean>(
+    () => customContext.trim().length > 0,
+  );
   const suggestAbortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -250,11 +251,6 @@ export function ChatPanel({ onClose }: Props) {
       window.clearTimeout(handle);
     };
   }, [busy, messages, pageContext, activeId, refreshSuggestions]);
-
-  /* Persist custom context as the user edits it. */
-  useEffect(() => {
-    saveCustomContext(customContext);
-  }, [customContext]);
 
   const startNewChat = () => {
     const s = newSession();
@@ -530,7 +526,7 @@ export function ChatPanel({ onClose }: Props) {
             data-testid="mcpagent-customcontext-toggle"
           >
             <Icon name={customContextOpen ? 'angle-down' : 'angle-right'} size="sm" />
-            <span>Custom context{customContext.trim() ? ' •' : ''}</span>
+            <span>Steer suggestions{customContext.trim() ? ' •' : ''}</span>
           </button>
           {suggesting && <span className={styles.suggestingHint}>Thinking of suggestions…</span>}
         </div>
@@ -546,7 +542,7 @@ export function ChatPanel({ onClose }: Props) {
               <TextArea
                 value={customContext}
                 onChange={(e) => setCustomContext(e.currentTarget.value)}
-                placeholder="Guidance to steer suggestions, e.g. 'I own checkout; focus on latency and 5xx'."
+                placeholder="Only shapes the suggested prompts below the chat, e.g. 'I own checkout; focus on latency and 5xx'. Not sent with your messages."
                 rows={2}
                 className={styles.textarea}
                 data-testid="mcpagent-customcontext-input"

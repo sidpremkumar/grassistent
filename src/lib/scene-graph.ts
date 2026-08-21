@@ -65,16 +65,117 @@ export function findSceneObjects(args: {
   return found;
 }
 
-/** A VizPanel node is identified by key "panel-<id>" plus a pluginId. */
+/**
+ * A VizPanel node is identified by key "panel-<id>" plus a pluginId.
+ *
+ * Grafana also creates *derived* keys ("panel-3-clone-1", the edit-mode copy,
+ * repeats, library panels), so an exact key match is preferred: mutating a
+ * clone instead of the node on screen looks like a successful no-op. Suffixed
+ * keys are only used as a fallback when no exact match exists.
+ */
 export function findPanel(args: { root: SceneObjectLike; panelId: number }): SceneObjectLike | undefined {
+  const exactKey = `panel-${args.panelId}`;
   const keyPattern = new RegExp(`^panel-${args.panelId}(?:$|-)`);
-  return findSceneObjects({
+  const candidates = findSceneObjects({
     root: args.root,
     match: (node) =>
       typeof node.state.key === 'string' &&
       keyPattern.test(node.state.key) &&
       typeof node.state.pluginId === 'string',
-  })[0];
+  });
+  return candidates.find((node) => node.state.key === exactKey) ?? candidates[0];
+}
+
+/** The uid of a runner's datasource, whether stored as a ref object or string. */
+export function runnerDatasourceUid(runner: SceneObjectLike): string | undefined {
+  const ds = runner.state.datasource;
+  if (typeof ds === 'string') {
+    return ds;
+  }
+  if (typeof ds === 'object' && ds !== null) {
+    const uid = (ds as { uid?: unknown }).uid;
+    return typeof uid === 'string' ? uid : undefined;
+  }
+  return undefined;
+}
+
+/** Deep structural equality over JSON-ish tool input values. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (typeof a !== typeof b || a === null || b === null) {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, i) => deepEqual(item, b[i]))
+    );
+  }
+  if (typeof a !== 'object') {
+    return false;
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const keys = Object.keys(ao);
+  return keys.length === Object.keys(bo).length && keys.every((k) => deepEqual(ao[k], bo[k]));
+}
+
+/**
+ * Reads back a runner's state after a mutation and reports what did NOT stick.
+ *
+ * `setState` is a silent write: Scenes ignores fields the node does not own
+ * (the classic case is a panel datasource, which lives on the runner, not on
+ * the individual queries). Without this read-back a no-op edit produces a
+ * healthy query verdict and the model confidently reports success while the
+ * user's screen never changed. Every mismatch here is a real failure.
+ */
+export function describeUnappliedState(args: {
+  runner: SceneObjectLike;
+  expectedQueries: Array<Record<string, unknown>>;
+  expectedDatasourceUid?: string;
+}): string[] {
+  const problems: string[] = [];
+
+  if (args.expectedDatasourceUid) {
+    const actual = runnerDatasourceUid(args.runner);
+    if (actual !== args.expectedDatasourceUid) {
+      problems.push(
+        `datasource did NOT change: panel is still on uid=${actual ?? 'unset'} ` +
+          `(wanted uid=${args.expectedDatasourceUid})`,
+      );
+    }
+  }
+
+  const actualQueries = Array.isArray(args.runner.state.queries)
+    ? (args.runner.state.queries as Array<Record<string, unknown>>)
+    : [];
+  if (actualQueries.length !== args.expectedQueries.length) {
+    problems.push(
+      `query count did NOT change as requested: panel has ${actualQueries.length}, wanted ${args.expectedQueries.length}`,
+    );
+    return problems;
+  }
+  for (let i = 0; i < args.expectedQueries.length; i++) {
+    const expected = args.expectedQueries[i];
+    const refId = typeof expected.refId === 'string' ? expected.refId : undefined;
+    const actual = refId
+      ? actualQueries.find((q) => q.refId === refId) ?? actualQueries[i]
+      : actualQueries[i];
+    if (!actual) {
+      problems.push(`query ${refId ?? `#${i}`} is missing from the panel after the edit`);
+      continue;
+    }
+    const dropped = Object.keys(expected).filter((key) => !deepEqual(actual[key], expected[key]));
+    if (dropped.length > 0) {
+      problems.push(
+        `query ${refId ?? `#${i}`} did NOT accept these fields: ${dropped
+          .map((k) => `${k}=${JSON.stringify(expected[k])} (still ${JSON.stringify(actual[k])})`)
+          .join(', ')}`,
+      );
+    }
+  }
+  return problems;
 }
 
 /**
@@ -145,6 +246,10 @@ function summarizeData(data: PanelDataLike): { ok: boolean; summary: string } {
  *
  * Pass `previousData` (the runner's data object captured BEFORE the mutation)
  * so a stale settled result is not mistaken for the new one.
+ *
+ * A timeout is reported as a FAILURE, not a success: "still Loading after 8s"
+ * means we cannot claim the user's panel now shows the requested data, and the
+ * model must say so rather than assert the edit worked.
  */
 export async function awaitRunnerVerdict(args: {
   runner: SceneObjectLike;
@@ -164,12 +269,58 @@ export async function awaitRunnerVerdict(args: {
     }
     if (Date.now() - started > timeoutMs) {
       return {
-        ok: true,
-        summary: `panel result: still ${data?.state ?? 'unknown'} after ${Math.round(timeoutMs / 1000)}s — check the refreshed page context for errors`,
+        ok: false,
+        summary:
+          `panel result: UNVERIFIED — still ${data?.state ?? 'unknown'} after ${Math.round(timeoutMs / 1000)}s` +
+          `${isStale ? ' (result never refreshed, the edit may not have triggered a re-query)' : ''}. ` +
+          'Do NOT tell the user the panel is updated; report that the result could not be confirmed.',
       };
     }
     await new Promise((resolve) => window.setTimeout(resolve, 250));
   }
+}
+
+/**
+ * Reads the queries + datasource actually loaded in the live scene, keyed by
+ * numeric panel id.
+ *
+ * Page context otherwise reads the *saved* dashboard model from the API, which
+ * cannot see in-place (unsaved) edits — so after `update_panel_query` the model
+ * would be shown the ORIGINAL query and could never tell that its own edit was
+ * a no-op. This is the ground truth the user is looking at.
+ */
+export function collectLivePanelQueries(): Map<
+  number,
+  { datasourceUid?: string; queries: Array<Record<string, unknown>> }
+> {
+  const live = new Map<number, { datasourceUid?: string; queries: Array<Record<string, unknown>> }>();
+  const root = sceneRoot();
+  if (!root) {
+    return live;
+  }
+  const panels = findSceneObjects({
+    root,
+    match: (node) =>
+      typeof node.state.key === 'string' &&
+      /^panel-\d+/.test(node.state.key) &&
+      typeof node.state.pluginId === 'string',
+  });
+  for (const panel of panels) {
+    const key = typeof panel.state.key === 'string' ? panel.state.key : '';
+    const id = Number(key.match(/^panel-(\d+)/)?.[1]);
+    if (!Number.isFinite(id) || live.has(id)) {
+      continue;
+    }
+    const runner = findQueryRunner({ panel });
+    if (!runner || !Array.isArray(runner.state.queries)) {
+      continue;
+    }
+    live.set(id, {
+      datasourceUid: runnerDatasourceUid(runner),
+      queries: runner.state.queries as Array<Record<string, unknown>>,
+    });
+  }
+  return live;
 }
 
 /**

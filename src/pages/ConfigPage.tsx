@@ -299,8 +299,8 @@ export function ConfigPage({ plugin }: Props) {
 
       <FieldSet label="Branding (optional)">
         <p className={styles.hint}>
-          Customize the icon and labels shown in the chat panel header, the top-bar button, and the floating
-          button. Leave blank to use the defaults.
+          Customize the icon and labels shown in the chat panel header and the top-bar button. Leave blank to
+          use the defaults.
         </p>
         <Field
           label="Icon"

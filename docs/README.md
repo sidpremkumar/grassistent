@@ -10,7 +10,7 @@
 | --- | --- |
 | [00-overview.md](./00-overview.md) | What it is, component map, request lifecycle, current-state matrix |
 | [01-architecture.md](./01-architecture.md) | Process/topology, trust boundary, data flow, why Go backend |
-| [02-frontend.md](./02-frontend.md) | React modules, `module.tsx` registration, FloatingChat (docked panel + top-bar injection), history, chat state machine, animation system |
+| [02-frontend.md](./02-frontend.md) | React modules, `module.tsx` registration, TopBarChat (docked panel + top-bar trigger portal), history, chat state machine, animation system |
 | [03-backend.md](./03-backend.md) | Go packages, app instance lifecycle, SSE `/chat` handler, settings/secrets |
 | [04-mcp-client.md](./04-mcp-client.md) | MCP JSON-RPC-over-HTTP client, handshake, tool namespacing |
 | [05-agent-loop.md](./05-agent-loop.md) | Bedrock ConverseStream tool-use loop, event emission, iteration/tool caps |

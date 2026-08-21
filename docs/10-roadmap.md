@@ -7,7 +7,7 @@ Authoritative list of what is **not** done or is partial. Update as things land.
 - **End-to-end verified**: full round-trip against real Bedrock confirmed (streaming `content` deltas → `done`).
 - **Token-level streaming**: loop uses `ConverseStream`; content streams token-by-token with a typewriter caret.
 - **Local run + provisioning**: Grafana 13.2 via docker-compose on port 3001; TestData + a real self-scraping Prometheus (`local-prom`, host port 9091) + sample dashboard (2 TestData panels, 1 real PromQL panel) provisioned from `provisioning/`. Requires `GF_PLUGINS_FORWARD_HOST_ENV_VARS`.
-- **Docked panel UI**: chat pushes the page aside (not overlay); DOM-injected top-bar trigger with FAB fallback.
+- **Docked panel UI**: chat pushes the page aside (not overlay); a single top-bar trigger icon portaled into the nav toolbar, plus a `⌘⇧A` toggle.
 - **Chat history**: client-side localStorage sessions with resume/delete.
 - **Dashboard-level context**: `extractPageContext` fetches the dashboard model (title, panels + ids, queries, datasource as `uid (type)`); mount retry + re-extract on URL change; suggestion chips instead of pre-seeded input.
 - **Model-generated suggestions**: `/resources/suggestions` + `Agent.Suggest` (tool-less `Converse`) turn the last ~10 messages + page context + user "custom context" into 3–4 follow-up chips, replacing the old static `buildPrefill` string. Debounced, idle-only, abort-on-supersede; failures degrade to no chips. See [13-suggestions.md](./13-suggestions.md).
@@ -32,7 +32,7 @@ Authoritative list of what is **not** done or is partial. Update as things land.
 
 ## Partial / caveats
 
-- Top-bar trigger is **DOM-injected** (extension slots are allow-listed to internal plugins in Grafana 13); the injection anchor is markup-dependent and may need updating across Grafana versions — the FAB fallback covers misses.
+- Top-bar trigger renders via a **portal into a DOM-attached host node** (extension slots are allow-listed to internal plugins in Grafana 13); the toolbar anchor is markup-dependent and may need updating across Grafana versions — the `⌘⇧A` shortcut covers misses.
 - SDK pinned at v0.251.0 because latest needs Go ≥1.26.5 (local Go 1.25.7). Bump Go, then the SDK.
 - Datasource detection prefers the dashboard model but reports only the first datasource on mixed dashboards.
 - Single shared 60s HTTP timeout for all MCP calls; no per-tool timeout/retry.

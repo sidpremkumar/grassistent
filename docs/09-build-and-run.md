@@ -121,9 +121,9 @@ curl -s -u admin:admin -X POST \
 ```
 
 Then set the model and MCP servers under **MCP Agent → Configuration**, and open
-the chat from the **MCP Agent** button in the top bar (or the floating button
-fallback). The chat is a **docked panel** that pushes the page content aside so
-you can keep editing panels/queries while chatting.
+the chat from the **MCP Agent** icon in the top bar (or `⌘⇧A` /
+`Ctrl+Shift+A`). The chat is a **docked panel** that pushes the page content
+aside so you can keep editing panels/queries while chatting.
 
 ## Provisioned datasources (for page-context + browser-tool testing)
 
@@ -170,7 +170,7 @@ curl -s -N -u admin:admin -X POST \
   up`. Temporary STS creds expire — recreate the container with fresh creds
   (`docker compose up -d --force-recreate` inside a fresh `aws-vault exec`).
 - **Chat button missing**: you may be on the pre-`singleTopNav` two-level top bar
-  (button falls back to a floating action button). Confirm the feature toggle,
+  (`⌘⇧A` / `Ctrl+Shift+A` still opens the chat). Confirm the feature toggle,
   hard-reload, and check the browser console.
 - **Plugin not visible**: confirm `dist/` contains `module.js`, `plugin.json`,
   and a matching `gpx_mcpagent_<os>_<arch>`; check the unsigned allowlist env.

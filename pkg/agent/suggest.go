@@ -11,22 +11,30 @@ import (
 )
 
 /*
-suggestSystemPrompt steers the model to produce short, immediately-actionable
-follow-up prompts the user is likely to want next. It must return ONLY a JSON
-array of strings so the caller can parse deterministically; the temperature is
-kept low for stable, grounded output.
+suggestSystemPrompt steers the model to produce at most a couple of genuinely
+useful follow-up prompts — or none at all. It must return ONLY a JSON array of
+strings so the caller can parse deterministically; the temperature is kept low
+for stable, grounded output.
 */
-const suggestSystemPrompt = `You suggest the next things a user might want to ask an observability agent embedded in Grafana.
+const suggestSystemPrompt = `You suggest the next thing a user might want to ask an observability agent embedded in Grafana.
 
-You are given the recent conversation, the Grafana page the user is looking at, and optional user-provided guidance. Propose follow-up prompts that are:
-- Specific and grounded in the actual conversation and page context (reference the real dashboard, panel, query, datasource, or error when possible).
-- Immediately useful as the user's NEXT message (phrased as something the user would type).
-- Short (max ~90 characters each), no numbering, no trailing punctuation clutter.
-- Distinct from each other and from what was already asked.
+You are given the recent conversation, the Grafana page the user is looking at, and optional user-provided guidance.
+
+BE EXTREMELY PICKY. An empty list is a GOOD answer. Returning nothing is far better than returning a generic or tangential suggestion. Do not pad. Do not try to fill a quota.
+
+Return 1 suggestion normally, 2 only when there are genuinely two distinct next steps that are both obviously valuable, and 0 whenever nothing clearly useful follows.
+
+A suggestion QUALIFIES only if ALL of these hold:
+- It follows directly from what just happened in this conversation — the actual query, panel, datasource, service, label, or error that was discussed. If you cannot name a concrete thing from the context in it, drop it.
+- It is the obvious next move a competent engineer would make right now, not merely something adjacent or possible.
+- It is not a rephrasing of something already asked or already answered.
+- It is not generic observability filler ("check the logs", "look at other services", "try a different time range", "set up an alert") unless the conversation specifically points there.
+
+Format: phrased as something the user would type, max ~90 characters, no numbering, no trailing punctuation clutter.
 
 If the user provided guidance, let it shape the suggestions.
 
-Return ONLY a compact JSON array of 3 or 4 strings. No prose, no code fences, no keys. Example: ["Break down p99 latency by route","Compare error rate to last week"]`
+Return ONLY a compact JSON array of 0, 1, or 2 strings. No prose, no code fences, no keys. Examples: ["Break down that p99 by route"] or []`
 
 /*
 Suggest performs a single, tool-less model call to generate follow-up prompt
@@ -49,8 +57,8 @@ func (a *Agent) Suggest(ctx context.Context, history []Turn, contextText, custom
 			&brtypes.SystemContentBlockMemberText{Value: suggestSystemPrompt},
 		},
 		InferenceConfig: &brtypes.InferenceConfiguration{
-			MaxTokens:   aws.Int32(400),
-			Temperature: aws.Float32(0.4),
+			MaxTokens:   aws.Int32(200),
+			Temperature: aws.Float32(0.2),
 		},
 	})
 	if err != nil {
@@ -61,7 +69,9 @@ func (a *Agent) Suggest(ctx context.Context, history []Turn, contextText, custom
 }
 
 // maxSuggestions caps how many prompts we return regardless of model output.
-const maxSuggestions = 4
+// Deliberately tight: one strong suggestion beats a list of weak ones, and zero
+// is an acceptable outcome.
+const maxSuggestions = 2
 
 // buildSuggestPrompt assembles the single user message given to the model.
 func buildSuggestPrompt(history []Turn, contextText, customContext string) string {
@@ -93,7 +103,7 @@ func buildSuggestPrompt(history []Turn, contextText, customContext string) strin
 	if b.Len() == 0 {
 		b.WriteString("There is no conversation or page context yet. ")
 	}
-	b.WriteString("Suggest the user's next prompts as a JSON array of strings.")
+	b.WriteString("Suggest at most 2 next prompts as a JSON array of strings, or [] if nothing is clearly worth suggesting.")
 	return b.String()
 }
 

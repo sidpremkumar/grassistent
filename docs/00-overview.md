@@ -17,14 +17,16 @@ It is deliberately generic: it has **no knowledge of any specific MCP backend**.
 ```
 src/                          # Frontend (React 19 + @grafana/ui 13)
   module.tsx                  # Plugin registration (root page, config page) + mounts the
-                              #   global FloatingChat into <body> (plugin is preloaded)
+                              #   global TopBarChat into <body> (plugin is preloaded)
   pages/
     App.tsx                   # App root -> renders AppPage
     AppPage.tsx               # Full-page chat route (nav "MCP Agent")
     ConfigPage.tsx            # Admin config (Bedrock, AWS creds, MCP servers)
   components/
-    FloatingChat.tsx          # Global entry: injects the top-bar trigger + renders the
-                              #   docked chat panel that pushes the page aside
+    TopBarChat.tsx            # Global entry: portals the trigger into the top nav toolbar
+                              #   + renders the docked chat panel that pushes the page aside
+    TopBarTrigger.tsx         # The single affordance: glass -> gradient icon button with
+                              #   sheen sweep, glow, and a live dot while open
     ChatPanel.tsx             # The chat surface (history list, messages, tool trace,
                               #   typewriter answer, input, animations)
     use-agent-chat.ts         # Hook: conversation state + SSE lifecycle
@@ -56,9 +58,10 @@ pkg/                          # Backend (Go)
 > UI placement note: Grafana 13 gates every top-bar / extension-sidebar
 > extension slot to an internal plugin allow-list, so a third-party plugin can't
 > render "next to Sign in" via extension points. The plugin is `preload: true`,
-> so `module.tsx` runs on every page and `FloatingChat` (a) DOM-injects a trigger
-> button beside Search/Sign in and (b) renders the chat as a docked panel that
-> shrinks `.grafana-app` rather than overlaying it, keeping the page interactive.
+> so `module.tsx` runs on every page and `TopBarChat` (a) keeps a portal host
+> node appended to the top nav toolbar and renders the trigger icon into it and
+> (b) renders the chat as a docked panel that shrinks `.grafana-app` rather than
+> overlaying it, keeping the page interactive.
 
 ## Request lifecycle (one chat turn)
 
@@ -86,8 +89,8 @@ User types / taps a suggestion chip in ChatPanel
 | Capability | State | Notes |
 | --- | --- | --- |
 | Frontend chat UI + animations | ✅ built | `ChatPanel.tsx`, typechecks clean |
-| Docked panel (pushes page, not overlay) | ✅ built | `FloatingChat.tsx` shrinks `.grafana-app`; page stays interactive |
-| Top-bar trigger next to Sign in | ✅ built (DOM-injected) | extension slots are allow-listed, so injected via MutationObserver; FAB fallback |
+| Docked panel (pushes page, not overlay) | ✅ built | `TopBarChat.tsx` shrinks `.grafana-app`; page stays interactive |
+| Top-bar trigger next to Sign in | ✅ built (portal into toolbar) | extension slots are allow-listed, so a host node is attached via MutationObserver; `⌘⇧A` toggles |
 | Chat history (localStorage) | ✅ built | `chat-store.ts`; session list + resume + delete |
 | Page-context extraction | ✅ built (best-effort) | async; mount retry + URL-change re-extract; see [06](./06-page-context.md) |
 | Model-generated suggestion chips | ✅ built | `/suggestions` + `Agent.Suggest`; last-10 messages + page + custom context; never pre-seeded input; see [13](./13-suggestions.md) |

@@ -68,12 +68,12 @@ export const backdropVariants: Variants = {
   exit: { opacity: 0, transition: { duration: 0.15 } },
 };
 
-/** Floating chat button: gentle scale-in with a hover/press response. */
-export const fabVariants: Variants = {
-  hidden: { opacity: 0, scale: 0.6, y: 8 },
+/** Top-bar trigger icon: settles in, with a lift on hover and a press response. */
+export const triggerVariants: Variants = {
+  hidden: { opacity: 0, scale: 0.7 },
   visible: { opacity: 1, scale: 1, y: 0, transition: spring },
-  hover: { scale: 1.06, transition: springFast },
-  tap: { scale: 0.94, transition: springFast },
+  hover: { y: -1, scale: 1.06, transition: springFast },
+  tap: { y: 0, scale: 0.92, transition: springFast },
 };
 
 /** Chat popover rises from the button anchor (bottom-right origin). */

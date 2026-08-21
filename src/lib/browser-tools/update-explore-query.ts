@@ -124,14 +124,29 @@ export const updateExploreQueryTool: BrowserTool = {
 
     /* 1. Datasource switch. */
     const newDsRef = asString(args.input.datasourceUid);
-    const dsInfo = resolveDatasource({ uidOrName: newDsRef ?? paneDatasourceUid(pane) ?? '' });
+    const previousDsUid = paneDatasourceUid(pane);
+    const previousDsInfo = previousDsUid ? resolveDatasource({ uidOrName: previousDsUid }) : undefined;
+    const dsInfo = resolveDatasource({ uidOrName: newDsRef ?? previousDsUid ?? '' });
     if (newDsRef) {
       if (!dsInfo) {
         return { content: `unknown datasource "${newDsRef}"`, isError: true };
       }
       pane.datasource = dsInfo.uid;
-      pane.queries = (pane.queries ?? []).map((q) => ({ ...q, datasource: { uid: dsInfo.uid } }));
-      changes.push(`datasource → ${dsInfo.name} (${dsInfo.type})`);
+      /* Carrying the old query fields across a type change (e.g. a PromQL
+       * "expr" onto Tempo) leaves Explore with a query the new datasource
+       * ignores, which renders as an empty pane while every check passes. Drop
+       * them unless the caller is replacing the queries anyway. */
+      const typeChanged = previousDsInfo !== undefined && previousDsInfo.type !== dsInfo.type;
+      const replacingQueries = Array.isArray(args.input.queries) && args.input.queries.length > 0;
+      pane.queries = (pane.queries ?? []).map((q) =>
+        typeChanged && !replacingQueries
+          ? { refId: q.refId, datasource: { uid: dsInfo.uid, type: dsInfo.type } }
+          : { ...q, datasource: { uid: dsInfo.uid, type: dsInfo.type } },
+      );
+      changes.push(
+        `datasource → ${dsInfo.name} (${dsInfo.type})` +
+          (typeChanged && !replacingQueries ? ' [incompatible query fields cleared — set a new query]' : ''),
+      );
     }
 
     /* 2. Full query replacement. */
