@@ -19,6 +19,14 @@ type MCPServerConfig struct {
 	// HeaderName / secret key of an optional auth header. The value is stored in
 	// secureJSONData under "mcpSecret_<Name>" so it is never sent to the browser.
 	AuthHeader string `json:"authHeader,omitempty"`
+	// Context is optional operator-provided guidance on how the agent should
+	// use this server's tools (e.g. "backend api logs live in the 'api' service;
+	// query loki with label app=backend-api"). Injected into the system prompt.
+	Context string `json:"context,omitempty"`
+	// Tools, when non-empty, is an explicit allowlist of tool names (as
+	// advertised by the server, before namespacing). Tools not listed are not
+	// advertised to the model. Empty = expose every tool.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // Settings is the plugin's non-secret configuration (jsonData).

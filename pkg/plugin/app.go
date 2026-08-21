@@ -57,15 +57,20 @@ func NewApp(ctx context.Context, appSettings backend.AppInstanceSettings) (insta
 // Dispose satisfies instancemgmt.InstanceDisposer.
 func (a *App) Dispose() {}
 
-// buildClients constructs MCP clients from configured servers, injecting the
-// per-server auth header value from decrypted secrets.
-func (a *App) buildClients() []*mcp.Client {
-	clients := make([]*mcp.Client, 0, len(a.settings.MCPServers))
+// buildServers constructs MCP client bindings from configured servers,
+// injecting the per-server auth header value from decrypted secrets plus the
+// operator's tool allowlist and usage context.
+func (a *App) buildServers() []agent.ServerBinding {
+	servers := make([]agent.ServerBinding, 0, len(a.settings.MCPServers))
 	for _, s := range a.settings.MCPServers {
 		authValue := a.secrets.mcpAuthValues[s.Name]
-		clients = append(clients, mcp.NewClient(s.Name, s.URL, s.AuthHeader, authValue, a.http))
+		servers = append(servers, agent.ServerBinding{
+			Client:       mcp.NewClient(s.Name, s.URL, s.AuthHeader, authValue, a.http),
+			AllowedTools: s.Tools,
+			Context:      s.Context,
+		})
 	}
-	return clients
+	return servers
 }
 
 // newAgent wires the Bedrock client + MCP clients into an agent.
@@ -74,5 +79,5 @@ func (a *App) newAgent() *agent.Agent {
 	if systemPrompt == "" {
 		systemPrompt = agent.DefaultSystemPrompt
 	}
-	return agent.New(a.bedrock, a.settings.ModelID, systemPrompt, a.settings.MaxToolIterations, a.settings.MaxTools, a.buildClients())
+	return agent.New(a.bedrock, a.settings.ModelID, systemPrompt, a.settings.MaxToolIterations, a.settings.MaxTools, a.buildServers())
 }

@@ -59,6 +59,19 @@ type toolBinding struct {
 	realName string
 }
 
+// ServerBinding pairs an MCP client with per-server operator configuration.
+type ServerBinding struct {
+	// Client is the initialized-on-demand MCP client for this server.
+	Client *mcp.Client
+	// AllowedTools, when non-empty, is an explicit allowlist of tool names (as
+	// advertised by the server, before namespacing). Tools not listed are not
+	// advertised to the model. Empty = expose every tool.
+	AllowedTools []string
+	// Context is operator-provided guidance on how the agent should use this
+	// server's tools; appended to the system prompt.
+	Context string
+}
+
 // Agent runs a Bedrock Converse tool-use loop against a set of MCP servers.
 type Agent struct {
 	bedrock       *bedrockruntime.Client
@@ -66,32 +79,70 @@ type Agent struct {
 	systemPrompt  string
 	maxIterations int
 	maxTools      int
-	clients       []*mcp.Client
+	servers       []ServerBinding
 }
 
-// New builds an agent.
-func New(brc *bedrockruntime.Client, modelID, systemPrompt string, maxIterations, maxTools int, clients []*mcp.Client) *Agent {
+// New builds an agent. Per-server operator context is folded into the system
+// prompt so the model knows how to use each server's tools.
+func New(brc *bedrockruntime.Client, modelID, systemPrompt string, maxIterations, maxTools int, servers []ServerBinding) *Agent {
 	return &Agent{
 		bedrock:       brc,
 		modelID:       modelID,
-		systemPrompt:  systemPrompt,
+		systemPrompt:  withServerContext(systemPrompt, servers),
 		maxIterations: maxIterations,
 		maxTools:      maxTools,
-		clients:       clients,
+		servers:       servers,
 	}
+}
+
+// withServerContext appends operator-provided per-server usage notes to the
+// system prompt so users can steer how the agent queries each MCP server
+// (e.g. which labels/services to use for "backend api logs").
+func withServerContext(systemPrompt string, servers []ServerBinding) string {
+	var notes []string
+	for _, s := range servers {
+		ctx := strings.TrimSpace(s.Context)
+		if ctx == "" {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("[%s]\n%s", s.Client.Name(), ctx))
+	}
+	if len(notes) == 0 {
+		return systemPrompt
+	}
+	return systemPrompt +
+		"\n\nOperator notes per MCP server (follow these when choosing and calling that server's tools):\n" +
+		strings.Join(notes, "\n\n")
 }
 
 // namespaced tool names avoid collisions across MCP servers: "<server>__<tool>".
 func namespaced(server, tool string) string { return server + "__" + tool }
 
+// allowSet turns an allowlist into a lookup set; nil means "allow everything".
+func allowSet(names []string) map[string]bool {
+	set := map[string]bool{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			set[n] = true
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
 // collectTools initializes each MCP client and builds the Bedrock tool config.
+// Per-server tool allowlists are applied here, before the MaxTools cap.
 // Browser tools are appended after the MaxTools cap so advertising many MCP
 // tools can never silently drop the frontend's capabilities.
 func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec) ([]brtypes.Tool, map[string]toolBinding, error) {
 	var tools []brtypes.Tool
 	bindings := map[string]toolBinding{}
 
-	for _, client := range a.clients {
+	for _, server := range a.servers {
+		client := server.Client
 		if err := client.Initialize(ctx); err != nil {
 			return nil, nil, fmt.Errorf("initialize %q: %w", client.Name(), err)
 		}
@@ -99,7 +150,11 @@ func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec
 		if err != nil {
 			return nil, nil, fmt.Errorf("list tools %q: %w", client.Name(), err)
 		}
+		allowed := allowSet(server.AllowedTools)
 		for _, t := range mcpTools {
+			if allowed != nil && !allowed[t.Name] {
+				continue
+			}
 			full := namespaced(client.Name(), t.Name)
 			var schema map[string]any
 			if len(t.InputSchema) > 0 {

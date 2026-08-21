@@ -42,7 +42,7 @@ Collect these before writing any Terraform / manifests:
 | Grafana ServiceAccount name | the SA the Grafana pod uses | `grafana` |
 | Bedrock model id | inference-profile id, must be enabled in the account | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | Plugin zip URL | GitHub release asset | `https://github.com/sidpremkumar/grassistent/releases/download/v0.1.0/mcpagent-app-0.1.0.zip` |
-| MCP server(s) | name + HTTPS URL (+ optional auth header/value) | `{"name":"skippy","url":"https://.../mcp"}` |
+| MCP server(s) | name + HTTPS URL (+ optional auth header/value, per-server `context` guidance, `tools` allowlist) | `{"name":"skippy","url":"https://.../mcp"}` |
 
 > The OIDC provider usually already exists for an EKS cluster. If not, create it
 > with `aws eks associate-identity-provider-config` or the
@@ -271,9 +271,20 @@ env:
     value: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
   - name: MCPAGENT_MAX_TOOL_ITERATIONS
     value: "12"
-  # MCP servers the agent can call (JSON array; see 08-config.md)
+  # MCP servers the agent can call (JSON array; see 08-config.md).
+  # Per server you can set:
+  #   - "context": free-text guidance injected into the system prompt, telling
+  #     the agent HOW to look things up on that server (e.g. which loki labels
+  #     or service names map to "backend api service logs").
+  #   - "tools": explicit allowlist of tool names to expose from that server
+  #     (empty/omitted = every tool the server advertises).
   - name: MCPAGENT_MCP_SERVERS
-    value: '[{"name":"skippy","url":"https://your-host/mcp","authHeader":"Authorization"}]'
+    value: >-
+      [{"name":"skippy",
+        "url":"https://your-host/mcp",
+        "authHeader":"Authorization",
+        "context":"Backend API service logs live in loki under {app=\"backend-api\"} in namespace prod. For 'get me all backend api service logs' use query_loki_logs with that selector.",
+        "tools":["query_loki_logs","list_loki_label_values","query_prometheus"]}]
 ```
 
 If an MCP server needs an auth value, store it as a **Kubernetes Secret** and

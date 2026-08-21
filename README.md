@@ -68,7 +68,7 @@ Open the plugin's **Configuration** page (admin) to set:
 
 - **Bedrock**: region, model ID (e.g. a Claude model), max tool iterations, optional system prompt.
 - **AWS credentials** (optional): leave blank to use the default AWS credential chain (IRSA, instance role, env). Static keys are stored as secrets.
-- **MCP servers**: a list of `{ name, url, authHeader }`. The auth header *value* is stored as a secret (`mcpSecret_<name>`). Only HTTP / streamable-HTTP transports are supported.
+- **MCP servers**: a list of `{ name, url, authHeader, context, tools }`. The auth header *value* is stored as a secret (`mcpSecret_<name>`). Only HTTP / streamable-HTTP transports are supported. `context` is optional free-text guidance the agent gets about how to use that server (e.g. which labels/services map to "backend api logs"); `tools` is an optional explicit allowlist of tool names — when set, only those tools are advertised to the model.
 
 ### Headless configuration via environment variables
 
@@ -81,7 +81,7 @@ Every setting can also come from env vars, useful for GitOps / container deploys
 | `MCPAGENT_MAX_TOOL_ITERATIONS` | Agent loop cap |
 | `MCPAGENT_MAX_TOOLS` | Max tools advertised to the model (0 = no cap) |
 | `MCPAGENT_SYSTEM_PROMPT` | System prompt override |
-| `MCPAGENT_MCP_SERVERS` | JSON array of `{name,url,authHeader}` |
+| `MCPAGENT_MCP_SERVERS` | JSON array of `{name,url,authHeader,context,tools}` |
 | `MCPAGENT_MCP_SECRET_<NAME>` | Auth header value for MCP server `<name>` (upper-cased) |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` | AWS creds (else default chain) |
 
@@ -89,9 +89,17 @@ Example:
 
 ```bash
 export MCPAGENT_MODEL_ID="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-export MCPAGENT_MCP_SERVERS='[{"name":"skippy","url":"https://host/mcp","authHeader":"Authorization"}]'
+export MCPAGENT_MCP_SERVERS='[{
+  "name": "skippy",
+  "url": "https://host/mcp",
+  "authHeader": "Authorization",
+  "context": "Backend API service logs live in loki under {app=\"backend-api\"}; use query_loki_logs with that selector.",
+  "tools": ["query_loki_logs", "list_loki_label_values", "query_prometheus"]
+}]'
 export MCPAGENT_MCP_SECRET_SKIPPY="Bearer <token>"
 ```
+
+`context` and `tools` are optional: `context` is injected into the system prompt as per-server usage notes, and `tools` restricts which of that server's tools are advertised to the model (empty = all).
 
 ## Develop
 

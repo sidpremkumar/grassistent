@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { css } from '@emotion/css';
 import { AppPluginMeta, GrafanaTheme2, PluginConfigPageProps, PluginMeta } from '@grafana/data';
 import { getBackendSrv, locationService } from '@grafana/runtime';
-import { Button, Field, FieldSet, IconButton, Input, SecretInput, useStyles2 } from '@grafana/ui';
+import { Button, Field, FieldSet, IconButton, Input, SecretInput, TextArea, useStyles2 } from '@grafana/ui';
 import { isSafeIconSrc } from '../lib/branding';
 /**
  * Admin configuration page for the MCP Agent plugin.
@@ -16,6 +16,19 @@ type MCPServerForm = {
   name: string;
   url: string;
   authHeader: string;
+  /** Operator guidance on how the agent should use this server's tools. */
+  context: string;
+  /** Comma/newline-separated tool allowlist; empty = expose every tool. */
+  tools: string;
+};
+
+/** Shape persisted in jsonData (tools as an array, matching the Go backend). */
+type MCPServerConfig = {
+  name: string;
+  url: string;
+  authHeader?: string;
+  context?: string;
+  tools?: string[];
 };
 
 type JsonData = {
@@ -23,7 +36,7 @@ type JsonData = {
   modelId?: string;
   maxToolIterations?: number;
   systemPrompt?: string;
-  mcpServers?: MCPServerForm[];
+  mcpServers?: MCPServerConfig[];
   brandIcon?: string;
   brandName?: string;
   brandSubtitle?: string;
@@ -34,6 +47,32 @@ type SecureFields = Record<string, boolean>;
 type Props = PluginConfigPageProps<AppPluginMeta<JsonData>>;
 
 const PLUGIN_ID = 'mcpagent-app';
+
+/** jsonData server entry -> editable form row. */
+function toServerForm(cfg: MCPServerConfig): MCPServerForm {
+  return {
+    name: cfg.name ?? '',
+    url: cfg.url ?? '',
+    authHeader: cfg.authHeader ?? '',
+    context: cfg.context ?? '',
+    tools: (cfg.tools ?? []).join(', '),
+  };
+}
+
+/** Editable form row -> jsonData server entry (tools string -> array). */
+function toServerConfig(form: MCPServerForm): MCPServerConfig {
+  const tools = form.tools
+    .split(/[\n,]/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return {
+    name: form.name,
+    url: form.url,
+    authHeader: form.authHeader || undefined,
+    context: form.context.trim() || undefined,
+    tools: tools.length > 0 ? tools : undefined,
+  };
+}
 
 export function ConfigPage({ plugin }: Props) {
   const styles = useStyles2(getStyles);
@@ -47,7 +86,9 @@ export function ConfigPage({ plugin }: Props) {
   );
   const [maxIter, setMaxIter] = useState<number>(jsonData.maxToolIterations ?? 12);
   const [systemPrompt, setSystemPrompt] = useState(jsonData.systemPrompt ?? '');
-  const [servers, setServers] = useState<MCPServerForm[]>(jsonData.mcpServers ?? []);
+  const [servers, setServers] = useState<MCPServerForm[]>(
+    (jsonData.mcpServers ?? []).map(toServerForm),
+  );
 
   /* Branding (optional): custom icon (base64 data URI or URL) + labels. */
   const [brandIcon, setBrandIcon] = useState(jsonData.brandIcon ?? '');
@@ -61,7 +102,8 @@ export function ConfigPage({ plugin }: Props) {
   const [mcpSecrets, setMcpSecrets] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const addServer = () => setServers((s) => [...s, { name: '', url: '', authHeader: '' }]);
+  const addServer = () =>
+    setServers((s) => [...s, { name: '', url: '', authHeader: '', context: '', tools: '' }]);
   const removeServer = (idx: number) => setServers((s) => s.filter((_, i) => i !== idx));
   const patchServer = (idx: number, patch: Partial<MCPServerForm>) =>
     setServers((s) => s.map((srv, i) => (i === idx ? { ...srv, ...patch } : srv)));
@@ -113,7 +155,7 @@ export function ConfigPage({ plugin }: Props) {
           modelId,
           maxToolIterations: Number(maxIter) || 12,
           systemPrompt,
-          mcpServers: servers,
+          mcpServers: servers.map(toServerConfig),
           brandIcon: brandIcon.trim(),
           brandName: brandName.trim(),
           brandSubtitle: brandSubtitle.trim(),
@@ -222,6 +264,32 @@ export function ConfigPage({ plugin }: Props) {
               onClick={() => removeServer(idx)}
               data-testid="mcpagent-remove-server"
             />
+            <Field
+              label="Tool allowlist (optional)"
+              description="Comma or newline separated tool names to expose from this server. Empty = all tools."
+              className={styles.fullWidth}
+            >
+              <TextArea
+                value={srv.tools}
+                placeholder="query_loki_logs, list_loki_label_values"
+                rows={2}
+                onChange={(e) => patchServer(idx, { tools: e.currentTarget.value })}
+                data-testid="mcpagent-server-tools"
+              />
+            </Field>
+            <Field
+              label="Usage context (optional)"
+              description="Guidance for the agent on how to use this server, e.g. which services/labels map to what."
+              className={styles.fullWidth}
+            >
+              <TextArea
+                value={srv.context}
+                placeholder={'Backend API logs live in loki under {app="backend-api"}. Always scope queries to namespace "prod".'}
+                rows={3}
+                onChange={(e) => patchServer(idx, { context: e.currentTarget.value })}
+                data-testid="mcpagent-server-context"
+              />
+            </Field>
           </div>
         ))}
         <Button variant="secondary" icon="plus" onClick={addServer} data-testid="mcpagent-add-server">
@@ -354,5 +422,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
   }),
+  fullWidth: css({ flexBasis: '100%' }),
   actions: css({ marginTop: theme.spacing(2) }),
 });
