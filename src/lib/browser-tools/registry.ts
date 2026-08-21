@@ -8,6 +8,7 @@ import { openPanelEditorTool } from './open-panel-editor';
 import { refreshTool } from './refresh';
 import { askUserTool } from './ask-user';
 import { updatePanelQueryTool } from './update-panel-query';
+import { updateExploreQueryTool } from './update-explore-query';
 
 /**
  * The registry of tools this frontend executes in the user's page. Advertised
@@ -23,6 +24,7 @@ const registry: BrowserTool[] = [
   refreshTool,
   askUserTool,
   updatePanelQueryTool,
+  updateExploreQueryTool,
 ];
 
 /** Tool manifest sent with every ChatRequest. */
@@ -45,7 +47,10 @@ export async function executeBrowserTool(args: {
     return { content: `unknown browser tool "${args.name}"`, isError: true };
   }
   try {
-    if (tool.requiresConfirmation) {
+    const needsConfirmation = tool.needsConfirmation
+      ? tool.needsConfirmation({ input: args.input })
+      : Boolean(tool.requiresConfirmation);
+    if (needsConfirmation) {
       const description = tool.describeAction?.({ input: args.input }) ?? `Run ${args.name}`;
       const approved = await args.ctx.confirm({ description });
       if (!approved) {

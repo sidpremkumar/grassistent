@@ -47,7 +47,7 @@ type AgentEvent =
   | { type: 'content';   text: string }
   | { type: 'reasoning'; text: string }                                    // defined, not emitted yet
   | { type: 'tool_call'; id: string; server: string; name: string; input: unknown; status: 'running' }
-  | { type: 'tool_result'; id: string; status: 'completed' | 'error'; preview?: string; error?: string }
+  | { type: 'tool_result'; id: string; status: 'completed' | 'error'; preview?: string; output?: string; error?: string }
   | { type: 'browser_tool_call'; id: string; server: 'browser'; name: string; input: unknown; status: 'running' }
   | { type: 'paused'; continuation: string }                               // terminal-for-this-stream; resume via continuation POST
   | { type: 'status';  text: string }                                      // defined, not emitted yet
@@ -58,7 +58,7 @@ type AgentEvent =
 ### Event semantics
 - `content` — a chunk of the visible answer, streamed **token-by-token** as `ConverseStream` text deltas arrive (typewriter effect).
 - `tool_call` — the model requested a tool; `id` correlates with the later `tool_result`. `name` is namespaced `<server>__<tool>`.
-- `tool_result` — tool finished; `completed` carries a truncated `preview`, `error` carries `error` text.
+- `tool_result` — tool finished; `completed` carries a short `preview` (280 runes) **and** the full `output` (UI-capped at 20k chars, `capUIOutput`) for the expandable Input/Output JSON view; `error` carries `error` text.
 - `browser_tool_call` — the model wants the **frontend** to execute a tool in the page (`name` is un-namespaced). No `tool_result` follows on the wire: the frontend executes locally and reports via the continuation POST.
 - `paused` — the stream is ending because browser tools are pending; `continuation` must be echoed back with `toolResults` to resume the turn. See [11-browser-tools.md](./11-browser-tools.md).
 - `done` — terminal success. `content` is **optional and usually omitted**: the answer was already streamed via `content` deltas, so the client keeps what it has. Always the last event on success.

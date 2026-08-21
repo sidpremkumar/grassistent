@@ -1,5 +1,7 @@
 import { getBackendSrv, getTemplateSrv, locationService } from '@grafana/runtime';
 import { PageContext } from './protocol';
+import { describeDatasourceInfo, describeDatasourceUid, listDatasources, resolveDatasource } from './datasources';
+import { recentAlerts } from './error-log';
 
 /**
  * Extracts context about the Grafana page the user is currently viewing so the
@@ -7,9 +9,15 @@ import { PageContext } from './protocol';
  * is on screen.
  *
  * We read from officially supported APIs: `getTemplateSrv()` for time range and
- * variables, `getBackendSrv()` for the dashboard model, and the URL for Explore
- * pane state. Everything is optional and best-effort.
+ * variables, `getBackendSrv()` for the dashboard model, `getDataSourceSrv()`
+ * for datasource identity, and the URL for Explore pane state. Everything is
+ * optional and best-effort. The bias is maximal visibility: full query
+ * objects, every Explore pane, resolved datasource types, and recent error
+ * toasts — the model can ignore detail, but it cannot recover what we omit.
  */
+
+/** Per-query JSON detail cap. Generous: Tempo filter arrays must survive. */
+const QUERY_JSON_MAX = 1500;
 
 /** Read the active time range via the supported TemplateSrv API. */
 function readTimeRange(): PageContext['timeRange'] {
@@ -116,7 +124,13 @@ function describeDatasource(ds: DashboardPanel['datasource']): string | undefine
     return undefined;
   }
   if (typeof ds === 'string') {
-    return ds;
+    return describeDatasourceUid({ uidOrName: ds });
+  }
+  if (ds.uid) {
+    const info = resolveDatasource({ uidOrName: ds.uid });
+    if (info) {
+      return describeDatasourceInfo({ info });
+    }
   }
   if (ds.uid && ds.type) {
     return `${ds.uid} (${ds.type})`;
@@ -140,9 +154,10 @@ type ExplorePaneState = {
 
 /**
  * Explore encodes each pane's state as JSON in the `panes` URL param
- * (schemaVersion >= 1). We read the first pane to surface its datasource,
- * time range, and the actual queries the user is running, so the agent can
- * reason about what's on screen instead of asking the user to describe it.
+ * (schemaVersion >= 1). We surface EVERY pane (split view included) with its
+ * pane key, resolved datasource, and full query objects, so the agent can
+ * address the exact pane and see the exact query shape (queryType, filters,
+ * limit, ...) instead of a lossy one-line summary.
  */
 function readExplore(): {
   datasource?: string;
@@ -163,30 +178,45 @@ function readExplore(): {
   } catch {
     return {};
   }
-  const first = Object.values(panes)[0];
-  if (!first) {
+  const entries = Object.entries(panes);
+  if (entries.length === 0) {
     return {};
   }
 
-  const datasource =
-    typeof first.datasource === 'string'
-      ? first.datasource
-      : first.datasource?.uid ?? first.datasource?.type;
+  const queries: string[] = [];
+  let datasource: string | undefined;
+  let timeRange: PageContext['timeRange'];
 
-  const queries = (first.queries ?? [])
-    .map((q) => summarizeQuery(q))
-    .filter((s): s is string => Boolean(s));
-
-  const timeRange =
-    first.range?.from && first.range?.to ? { from: first.range.from, to: first.range.to } : undefined;
+  for (const [paneKey, pane] of entries) {
+    const dsRef =
+      typeof pane.datasource === 'string'
+        ? pane.datasource
+        : pane.datasource?.uid ?? pane.datasource?.type;
+    const dsDescribed = dsRef ? describeDatasourceUid({ uidOrName: dsRef }) : undefined;
+    if (dsDescribed && !datasource) {
+      datasource = dsDescribed;
+    }
+    if (!timeRange && pane.range?.from && pane.range?.to) {
+      timeRange = { from: pane.range.from, to: pane.range.to };
+    }
+    for (const q of pane.queries ?? []) {
+      const summary = summarizeQuery(q);
+      if (summary) {
+        const refId = typeof q.refId === 'string' ? q.refId : '?';
+        const paneDs = dsDescribed ? ` ds=${dsDescribed}` : '';
+        queries.push(`[pane=${paneKey} refId=${refId}${paneDs}] ${summary}`);
+      }
+    }
+  }
 
   return { datasource, queries, timeRange };
 }
 
 /**
- * Reduces a raw Explore query object to a compact human/agent-readable string.
- * Query shapes vary per datasource, so we probe the common expression fields
- * and fall back to a trimmed JSON of the meaningful keys.
+ * Renders one query object for the agent. Expression-style queries get their
+ * expression up front, but the FULL query object is always included so
+ * datasource-specific structure (queryType, filters, limit, tableType, ...)
+ * is never hidden from the model.
  */
 function summarizeQuery(q: Record<string, unknown>): string | undefined {
   const expr =
@@ -194,16 +224,34 @@ function summarizeQuery(q: Record<string, unknown>): string | undefined {
     (typeof q.query === 'string' && q.query) ||
     (typeof q.rawSql === 'string' && q.rawSql) ||
     (typeof q.target === 'string' && q.target);
-  if (expr) {
-    return expr;
-  }
+
   const omit = new Set(['refId', 'datasource', 'key', 'hide']);
   const rest = Object.fromEntries(Object.entries(q).filter(([k]) => !omit.has(k)));
   const json = JSON.stringify(rest);
+  const bounded = json.length > QUERY_JSON_MAX ? `${json.slice(0, QUERY_JSON_MAX)}…` : json;
+
+  if (expr) {
+    /* Expression + full object: the object is what tools must reproduce. */
+    return json && json !== '{}' && json !== JSON.stringify({ expr }) ? `${expr} | full: ${bounded}` : expr;
+  }
   if (!json || json === '{}') {
     return undefined;
   }
-  return json.length > 300 ? `${json.slice(0, 300)}…` : json;
+  return bounded;
+}
+
+/** "name=value" pairs for every template variable that has a current value. */
+function readVariables(): string[] {
+  return getTemplateSrv()
+    .getVariables()
+    .map((v) => {
+      const current = (v as { current?: { value?: unknown } }).current;
+      const value = current?.value;
+      const rendered =
+        typeof value === 'string' ? value : Array.isArray(value) ? value.join(',') : undefined;
+      return rendered !== undefined ? `${v.name}=${rendered}` : v.name;
+    })
+    .filter(Boolean);
 }
 
 export async function extractPageContext(): Promise<PageContext> {
@@ -216,10 +264,9 @@ export async function extractPageContext(): Promise<PageContext> {
   const url = window.location.href;
   const isExplore = locationService.getLocation().pathname.includes('/explore');
 
-  const variables = getTemplateSrv()
-    .getVariables()
-    .map((v) => v.name)
-    .filter(Boolean);
+  const variables = readVariables();
+  const datasources = listDatasources({});
+  const recentErrors = recentAlerts();
 
   const parts: string[] = [];
   if (dash.dashboardTitle) {
@@ -260,6 +307,9 @@ export async function extractPageContext(): Promise<PageContext> {
     queries: queries.length > 0 ? queries : undefined,
     timeRange,
     url,
+    variables: variables.length > 0 ? variables : undefined,
+    datasources: datasources.length > 0 ? datasources : undefined,
+    recentErrors: recentErrors.length > 0 ? recentErrors : undefined,
   };
 }
 
@@ -273,18 +323,4 @@ export function hasPageContext(ctx: PageContext): boolean {
       (ctx.queries && ctx.queries.length > 0) ||
       ctx.timeRange,
   );
-}
-
-/** Build a default prefilled question from the current page context. */
-export function buildPrefill(ctx: PageContext): string {
-  if (ctx.dashboardTitle) {
-    return `Investigate what's happening on "${ctx.dashboardTitle}" for the current time range and explain any anomalies.`;
-  }
-  if (ctx.queries && ctx.queries.length > 0) {
-    return `Explain what my current Explore query is doing and how to improve it for the current time range.`;
-  }
-  if (ctx.summary) {
-    return `${ctx.summary}\n\nWhat should I look into?`;
-  }
-  return '';
 }

@@ -27,6 +27,12 @@ export type BrowserTool = {
   spec: BrowserToolSpec;
   /** Mutating tools are gated behind an inline confirmation chip. */
   requiresConfirmation?: boolean;
+  /**
+   * Per-call gate for tools that are only sometimes mutating (e.g. switching
+   * an Explore tab is free, rewriting the query needs approval). Takes
+   * precedence over `requiresConfirmation` when defined.
+   */
+  needsConfirmation?(args: { input: Record<string, unknown> }): boolean;
   /** Short human description of what will happen, shown in the confirm chip. */
   describeAction?(args: { input: Record<string, unknown> }): string;
   execute(args: { input: Record<string, unknown>; ctx: BrowserToolContext }): Promise<BrowserToolOutcome>;

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './pages/App';
 import { ConfigPage } from './pages/ConfigPage';
 import { FloatingChat } from './components/FloatingChat';
+import { initErrorCapture } from './lib/error-log';
 
 /**
  * Plugin entry. Registers:
@@ -27,6 +28,9 @@ export const plugin = new AppPlugin<{}>()
   });
 
 mountFloatingChat();
+/* Start capturing error toasts immediately so the agent's page context can
+ * include failures that happened before the chat was even opened. */
+initErrorCapture();
 
 /**
  * Mounts the global floating chat once. Guards against double-mounting when the

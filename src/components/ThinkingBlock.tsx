@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { ChatToolCall } from './use-agent-chat';
+import { JsonBlock } from './JsonBlock';
 
 /**
  * ThinkingBlock renders a Linear/Cursor-style collapsible "thinking" section:
@@ -113,7 +114,9 @@ function ToolStep({
   reduceMotion: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const detail = tool.error ?? tool.preview;
+  const hasInput = tool.input !== undefined && tool.input !== null;
+  const output = tool.output ?? tool.preview;
+  const hasDetail = hasInput || Boolean(output) || Boolean(tool.error);
   const running = tool.status === 'running';
 
   return (
@@ -144,15 +147,15 @@ function ToolStep({
       <button
         type="button"
         className={styles.stepButton}
-        onClick={() => detail && setOpen((o) => !o)}
-        disabled={!detail}
+        onClick={() => hasDetail && setOpen((o) => !o)}
+        disabled={!hasDetail}
         data-testid="mcpagent-thinking-step"
       >
         <span className={styles.stepName}>
           {tool.server && <span className={styles.stepServer}>{tool.server}</span>}
           {tool.name.replace(`${tool.server}__`, '')}
         </span>
-        {detail && (
+        {hasDetail && (
           <motion.span animate={{ rotate: open ? 90 : 0 }} className={styles.stepChevron}>
             <Icon name="angle-right" size="xs" />
           </motion.span>
@@ -160,16 +163,23 @@ function ToolStep({
       </button>
 
       <AnimatePresence initial={false}>
-        {open && detail && (
-          <motion.pre
-            className={styles.detail}
+        {open && hasDetail && (
+          <motion.div
+            className={styles.detailCard}
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 380, damping: 34 }}
           >
-            {detail}
-          </motion.pre>
+            <div className={styles.detailInner}>
+              {hasInput && <JsonBlock label="Input" value={tool.input} tone="input" />}
+              {tool.error ? (
+                <JsonBlock label="Error" value={tool.error} tone="error" />
+              ) : (
+                output && <JsonBlock label="Output" value={output} tone="output" />
+              )}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
     </motion.div>
@@ -311,18 +321,17 @@ const getStyles = (theme: GrafanaTheme2) => ({
     letterSpacing: '0.04em',
   }),
   stepChevron: css({ display: 'inline-flex', color: theme.colors.text.disabled }),
-  detail: css({
-    margin: theme.spacing(0.5, 0, 0, 0),
-    padding: theme.spacing(1),
-    background: theme.colors.background.canvas,
+  detailCard: css({
+    overflow: 'hidden',
+  }),
+  detailInner: css({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(0.5),
+    margin: theme.spacing(0.5, 0, 0.5, 0),
+    padding: theme.spacing(0.75, 1),
+    background: theme.colors.background.secondary,
     border: `1px solid ${theme.colors.border.weak}`,
     borderRadius: theme.shape.radius.default,
-    fontSize: '11px',
-    lineHeight: 1.5,
-    color: theme.colors.text.secondary,
-    maxHeight: '220px',
-    overflow: 'auto',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
   }),
 });

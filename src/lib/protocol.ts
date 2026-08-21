@@ -21,6 +21,12 @@ export type PageContext = {
   timeRange?: { from: string; to: string };
   /** URL of the page the chat was launched from. */
   url?: string;
+  /** Template variables as "name=value" pairs. */
+  variables?: string[];
+  /** Datasources available to the user: "name (type=..., uid=...)". */
+  datasources?: string[];
+  /** Recent error/warning toasts captured on the page, newest last. */
+  recentErrors?: string[];
 };
 
 export type ChatRequest = {
@@ -37,6 +43,27 @@ export type ChatRequest = {
   continuation?: string;
   /** Results of the browser tool calls the paused turn asked for. */
   toolResults?: BrowserToolResult[];
+};
+
+/* ---- Suggestions (POST /resources/suggestions) ---- */
+
+/**
+ * Request for dynamic, LLM-generated follow-up suggestions. Sent after a turn
+ * settles (or on load, with only page context). The backend runs a single,
+ * tool-less model call over the recent conversation and returns short prompts
+ * the user is likely to want next.
+ */
+export type SuggestionsRequest = {
+  /** Recent conversation, oldest first (the frontend caps this, e.g. last 10). */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Grafana page context so suggestions stay grounded in what's on screen. */
+  pageContext?: PageContext;
+  /** Free-text guidance the user has given us to steer suggestions. */
+  customContext?: string;
+};
+
+export type SuggestionsResponse = {
+  suggestions: string[];
 };
 
 /** A tool the frontend executes in the user's page (namespaced browser__ server-side). */
@@ -64,8 +91,8 @@ export type AgentEvent =
   | { type: 'reasoning'; text: string }
   /** The agent decided to call an MCP tool. */
   | { type: 'tool_call'; id: string; server: string; name: string; input: unknown; status: 'running' }
-  /** An MCP tool returned (or errored). */
-  | { type: 'tool_result'; id: string; status: 'completed' | 'error'; preview?: string; error?: string }
+  /** An MCP tool returned (or errored). `output` is the full (UI-capped) result payload. */
+  | { type: 'tool_result'; id: string; status: 'completed' | 'error'; preview?: string; output?: string; error?: string }
   /** The agent wants this frontend to execute a tool in the page. */
   | { type: 'browser_tool_call'; id: string; server: 'browser'; name: string; input: unknown; status: 'running' }
   /** The turn paused on browser tools; resume by POSTing the continuation + results. */

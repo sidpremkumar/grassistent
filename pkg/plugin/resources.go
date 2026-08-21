@@ -21,14 +21,16 @@ type pageContext struct {
 	Queries        []string `json:"queries"`
 	Datasource     string   `json:"datasource"`
 	URL            string   `json:"url"`
+	Variables      []string `json:"variables"`
+	Datasources    []string `json:"datasources"`
+	RecentErrors   []string `json:"recentErrors"`
 	TimeRange      *struct {
 		From string `json:"from"`
 		To   string `json:"to"`
 	} `json:"timeRange"`
 }
 
-type chatRequest struct {
-	SessionID   string       `json:"sessionId"`
+type chatRequest struct {	SessionID   string       `json:"sessionId"`
 	Message     string       `json:"message"`
 	History     []agent.Turn `json:"history"`
 	PageContext *pageContext `json:"pageContext"`
@@ -40,10 +42,23 @@ type chatRequest struct {
 	ToolResults  []agent.BrowserToolResult `json:"toolResults"`
 }
 
+// suggestRequest asks the backend for dynamic follow-up prompt suggestions
+// derived from the recent conversation, page context, and user guidance.
+type suggestRequest struct {
+	History       []agent.Turn `json:"history"`
+	PageContext   *pageContext `json:"pageContext"`
+	CustomContext string       `json:"customContext"`
+}
+
+type suggestResponse struct {
+	Suggestions []string `json:"suggestions"`
+}
+
 // newResourceHandler builds the HTTP mux for plugin resource routes.
 func newResourceHandler(app *App) backend.CallResourceHandler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chat", app.handleChat)
+	mux.HandleFunc("/suggestions", app.handleSuggestions)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -111,6 +126,43 @@ func (a *App) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSuggestions returns dynamic follow-up prompt suggestions as JSON. It is
+// best-effort: any failure yields an empty list (HTTP 200) so the UI simply
+// shows no chips rather than surfacing an error.
+func (a *App) handleSuggestions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		writeSuggestions(w, nil)
+		return
+	}
+
+	var req suggestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSuggestions(w, nil)
+		return
+	}
+
+	contextText := ""
+	if req.PageContext != nil {
+		contextText = contextBody(req.PageContext)
+	}
+
+	suggestions, err := a.newAgent().Suggest(r.Context(), req.History, contextText, req.CustomContext)
+	if err != nil {
+		backend.Logger.Warn("suggestions failed", "error", err)
+		writeSuggestions(w, nil)
+		return
+	}
+	writeSuggestions(w, suggestions)
+}
+
+func writeSuggestions(w http.ResponseWriter, suggestions []string) {
+	if suggestions == nil {
+		suggestions = []string{}
+	}
+	_ = json.NewEncoder(w).Encode(suggestResponse{Suggestions: suggestions})
+}
+
 // enrichWithContext prepends a compact page-context preamble so the agent knows
 // what the user is looking at without the frontend hard-coding provider prompts.
 func enrichWithContext(message string, ctx *pageContext) string {
@@ -147,6 +199,18 @@ func contextBody(ctx *pageContext) string {
 	}
 	if ctx.TimeRange != nil {
 		fmt.Fprintf(&b, "Time range: %s to %s\n", ctx.TimeRange.From, ctx.TimeRange.To)
+	}
+	if len(ctx.Variables) > 0 {
+		fmt.Fprintf(&b, "Variables: %s\n", strings.Join(ctx.Variables, ", "))
+	}
+	if len(ctx.Datasources) > 0 {
+		fmt.Fprintf(&b, "Available datasources: %s\n", strings.Join(ctx.Datasources, "; "))
+	}
+	if len(ctx.RecentErrors) > 0 {
+		b.WriteString("Recent errors/warnings shown on the page:\n")
+		for _, e := range ctx.RecentErrors {
+			fmt.Fprintf(&b, "  - %s\n", e)
+		}
 	}
 	if ctx.URL != "" {
 		fmt.Fprintf(&b, "URL: %s\n", ctx.URL)

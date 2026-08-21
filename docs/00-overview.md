@@ -29,6 +29,8 @@ src/                          # Frontend (React 19 + @grafana/ui 13)
                               #   typewriter answer, input, animations)
     use-agent-chat.ts         # Hook: conversation state + SSE lifecycle
     ThinkingBlock.tsx         # Collapsible Linear/Cursor-style "thinking" trace
+    JsonBlock.tsx             # Collapsible, syntax-highlighted JSON viewer for tool
+                              #   input/output payloads (copy-to-clipboard)
   lib/
     protocol.ts               # ChatRequest / AgentEvent / PageContext types + SSE parse
     chat-stream.ts            # POST /resources/chat and parse SSE stream

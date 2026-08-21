@@ -1,4 +1,4 @@
-import { AgentEvent, ChatRequest, parseAgentEvent } from './protocol';
+import { AgentEvent, ChatRequest, SuggestionsRequest, SuggestionsResponse, parseAgentEvent } from './protocol';
 
 /**
  * Streams a chat turn from the plugin's Go backend over SSE.
@@ -10,6 +10,7 @@ import { AgentEvent, ChatRequest, parseAgentEvent } from './protocol';
 
 const PLUGIN_ID = 'mcpagent-app';
 const RESOURCE_URL = `/api/plugins/${PLUGIN_ID}/resources/chat`;
+const SUGGESTIONS_URL = `/api/plugins/${PLUGIN_ID}/resources/suggestions`;
 
 export type ChatStreamHandlers = {
   onEvent: (event: AgentEvent) => void;
@@ -81,5 +82,34 @@ export async function streamChat(
     handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
   } finally {
     reader.releaseLock();
+  }
+}
+
+/**
+ * Fetches dynamic follow-up prompt suggestions from the backend. This is a
+ * best-effort, non-streaming call: any failure (network, backend, abort)
+ * resolves to an empty list so the caller can simply render no chips.
+ */
+export async function fetchSuggestions(
+  request: SuggestionsRequest,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  try {
+    const response = await fetch(SUGGESTIONS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const body = (await response.json()) as SuggestionsResponse;
+    return Array.isArray(body.suggestions) ? body.suggestions : [];
+  } catch {
+    return [];
   }
 }

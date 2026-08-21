@@ -57,8 +57,12 @@ The reusable chat surface. Responsibilities:
   whenever messages settle.
 - On mount: `extractPageContext()` with a 3×700ms retry (Scenes hydrates async),
   re-extracted on every URL change (`locationService.getHistory().listen`).
-  `buildPrefill(ctx)` feeds a tappable **suggestion chip** above the composer —
-  the input is never pre-seeded; tapping the chip fills it.
+- **Suggestion chips**: after each settled turn (and on load) the panel asks the
+  backend for model-generated follow-up prompts (`fetchSuggestions`, debounced
+  400ms, idle-only, abort-on-supersede) and renders them as tappable dashed chips
+  above the composer — the input is never pre-seeded; tapping a chip fills it.
+  A `Custom context` disclosure below lets the user persist free-text guidance
+  that steers those suggestions. See [13](./13-suggestions.md).
 - **Interaction chips**: when a browser tool needs the human (`ask_user`
   question options, or the Allow / Always allow / Deny confirmation gate for
   mutating tools), `useAgentChat.interaction` renders as an inline card above
@@ -78,6 +82,13 @@ The reusable chat surface. Responsibilities:
 - `Enter` sends, `Shift+Enter` newlines.
 - Delegates conversation state to `useAgentChat`; delegates the reasoning/tool
   trace to `ThinkingBlock`.
+- **Tool call inspection**: expanding a step in `ThinkingBlock` shows an
+  Input/Output detail card. Each payload renders via `JsonBlock.tsx` — a
+  labeled, independently collapsible section with pretty-printed,
+  syntax-highlighted JSON (plain-text fallback for non-JSON), a `json`/`text`
+  type hint, and copy-to-clipboard. Errors render as a red-tinted `Error`
+  section instead of `Output`. Old persisted sessions that only have `preview`
+  still render (output falls back to preview).
 
 ## Session persistence — `lib/chat-store.ts`
 
@@ -85,6 +96,8 @@ The reusable chat surface. Responsibilities:
 - `ChatSession = { id, title, createdAt, updatedAt, messages }`.
 - `loadStore` / `saveStore` (trims to 50 most-recent), `newSession`,
   `deriveTitle`. All best-effort and corruption-tolerant.
+- `loadCustomContext` / `saveCustomContext` keep the user's suggestion guidance
+  under a separate key `mcpagent.customContext.v1` (spans all sessions).
 
 ## State machine — `components/use-agent-chat.ts`
 
@@ -100,7 +113,7 @@ type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
   reasoning: string;           // streamed reasoning shown in ThinkingBlock
-  toolCalls: ChatToolCall[];   // { id, server, name, status, preview?, error? }
+  toolCalls: ChatToolCall[];   // { id, server, name, status, input?, preview?, output?, error? }
   status?: string;
   streaming: boolean;
 };
@@ -111,7 +124,8 @@ type ChatMessage = {
 2. Pushes a user message + a streaming assistant placeholder.
 3. Opens the SSE stream via `streamChat()` and patches the assistant message on
    each `AgentEvent`: `content` → append, `reasoning` → append, `status` → set,
-   `tool_call` → push running call, `tool_result` → update matching call,
+   `tool_call` → push running call (capturing `input`), `tool_result` → update
+   matching call with `status`/`preview`/`output`/`error`,
    `done` → finalize, `error` → error text.
 4. `onDone`/`onError` clear `busy` and the abort ref.
 

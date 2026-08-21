@@ -65,8 +65,37 @@ export function saveStore(store: Store): void {
   }
 }
 
-export function genSessionId(): string {
-  return `sess-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+const CUSTOM_CONTEXT_KEY = 'mcpagent.customContext.v1';
+
+/**
+ * Loads the user's free-text custom context — guidance they've given us to
+ * steer suggestions (e.g. "I own the checkout service; focus on latency").
+ * Stored separately from chat history since it spans all sessions.
+ */
+export function loadCustomContext(): string {
+  if (typeof localStorage === 'undefined') {
+    return '';
+  }
+  try {
+    return localStorage.getItem(CUSTOM_CONTEXT_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Persists the user's custom context. Best-effort; ignores quota errors. */
+export function saveCustomContext(value: string): void {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+  try {
+    localStorage.setItem(CUSTOM_CONTEXT_KEY, value);
+  } catch {
+    /* quota exceeded or unavailable */
+  }
+}
+
+export function genSessionId(): string {  return `sess-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 }
 
 export function newSession(): ChatSession {

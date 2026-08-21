@@ -13,7 +13,11 @@ export type ChatToolCall = {
   server: string;
   name: string;
   status: 'running' | 'completed' | 'error';
+  /** The JSON arguments the model called the tool with. */
+  input?: unknown;
   preview?: string;
+  /** Full (backend-capped) tool result payload, rendered as JSON when possible. */
+  output?: string;
   error?: string;
 };
 
@@ -155,12 +159,17 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
                 ...m,
                 toolCalls: [
                   ...m.toolCalls,
-                  { id: event.id, server: event.server, name: event.name, status: 'running' },
+                  { id: event.id, server: event.server, name: event.name, input: event.input, status: 'running' },
                 ],
               }));
               break;
             case 'tool_result':
-              patchToolCall(event.id, { status: event.status, preview: event.preview, error: event.error });
+              patchToolCall(event.id, {
+                status: event.status,
+                preview: event.preview,
+                output: event.output,
+                error: event.error,
+              });
               break;
             case 'browser_tool_call': {
               const input =
@@ -172,7 +181,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
                 ...m,
                 toolCalls: [
                   ...m.toolCalls,
-                  { id: event.id, server: 'browser', name: event.name, status: 'running' },
+                  { id: event.id, server: 'browser', name: event.name, input: event.input, status: 'running' },
                 ],
               }));
               break;
@@ -246,6 +255,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
           patchToolCall(call.id, {
             status: outcome.isError ? 'error' : 'completed',
             preview: outcome.isError ? undefined : outcome.content,
+            output: outcome.isError ? undefined : outcome.content,
             error: outcome.isError ? outcome.content : undefined,
           });
           results.push({ id: call.id, content: outcome.content, isError: outcome.isError });

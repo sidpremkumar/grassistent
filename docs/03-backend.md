@@ -36,6 +36,7 @@ Grafana creates one `App` per plugin instance and reuses it; `Dispose()` is a no
 
 Mux (via `httpadapter.New`):
 - `POST /chat` — the streaming chat turn (below).
+- `POST /suggestions` — model-generated follow-up prompts (JSON, not streamed). See [13-suggestions.md](./13-suggestions.md).
 - `GET /health` — returns `{"status":"ok"}`.
 
 Grafana exposes these at `/api/plugins/mcpagent-app/resources/<path>`.
@@ -69,6 +70,18 @@ URL: <..>
 ```
 
 Only non-empty fields are included. If `pageContext` is nil, the raw message is used.
+
+### `handleSuggestions` (JSON)
+
+1. Decodes `suggestRequest` `{ history[], pageContext, customContext }`.
+2. Renders page context with the same `contextBody()` helper used above.
+3. Calls `a.newAgent().Suggest(r.Context(), history, contextText, customContext)` —
+   a single non-streaming `Converse` with **no tools** (`pkg/agent/suggest.go`).
+4. **Best-effort**: any failure (wrong method, bad body, Bedrock error) returns
+   HTTP 200 with `{"suggestions":[]}` so the UI degrades to showing no chips.
+   Bedrock errors are logged at `Warn`.
+
+See [13-suggestions.md](./13-suggestions.md) for the prompt and parsing rules.
 
 ## Settings/secrets — `pkg/plugin/settings.go`
 

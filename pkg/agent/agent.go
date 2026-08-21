@@ -23,6 +23,8 @@ type Event struct {
 	Input   any    `json:"input,omitempty"`
 	Status  string `json:"status,omitempty"`
 	Preview string `json:"preview,omitempty"`
+	// Output is the full (UI-capped) tool result payload for rich rendering.
+	Output  string `json:"output,omitempty"`
 	Error   string `json:"error,omitempty"`
 	Content string `json:"content,omitempty"`
 	// Continuation is the opaque resume token carried by "paused" events.
@@ -506,7 +508,7 @@ func (a *Agent) runTool(
 		emit(Event{Type: "tool_result", ID: toolUseID, Status: "error", Error: err.Error()})
 		return toolResultBlock(toolUseID, err.Error(), true)
 	}
-	emit(Event{Type: "tool_result", ID: toolUseID, Status: "completed", Preview: preview(text)})
+	emit(Event{Type: "tool_result", ID: toolUseID, Status: "completed", Preview: preview(text), Output: capUIOutput(text)})
 	/* Bound the result fed back to the model to avoid context overflow. */
 	return toolResultBlock(toolUseID, capResult(text), isErr)
 }
@@ -523,4 +525,18 @@ func capResult(s string) string {
 	}
 	return string(runes[:maxToolResultChars]) + "\n\n[truncated: result exceeded " +
 		fmt.Sprintf("%d", maxToolResultChars) + " chars]"
+}
+
+// maxUIOutputChars caps the full tool output shipped to the UI over SSE. It is
+// looser than the model cap since it is render-only, but still bounded so one
+// huge payload can't bloat the stream or browser localStorage.
+const maxUIOutputChars = 20000
+
+func capUIOutput(s string) string {
+	runes := []rune(s)
+	if len(runes) <= maxUIOutputChars {
+		return s
+	}
+	return string(runes[:maxUIOutputChars]) + "\n\n[truncated: output exceeded " +
+		fmt.Sprintf("%d", maxUIOutputChars) + " chars]"
 }

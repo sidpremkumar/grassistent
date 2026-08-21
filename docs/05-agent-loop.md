@@ -16,6 +16,7 @@ type Event struct {
     Input   any    // tool input JSON (tool_call)
     Status  string // "running" | "completed" | "error" | free-form status
     Preview string // truncated tool output (tool_result completed)
+    Output  string // full tool output, UI-capped at 20k chars (tool_result completed)
     Error   string // error text (tool_result error / error)
     Content string // full final answer (done)
 }
@@ -80,10 +81,11 @@ stop reason.
 - Unknown tool → emit `tool_result{error}` and return an error `toolResult` block.
 - Else `client.CallTool(realName, inputJSON)`:
   - error → emit `tool_result{error}`, return error `toolResult` block.
-  - success → emit `tool_result{completed, preview}`, return `toolResult` block
-    with the result passed through `capResult` (truncated to
-    `maxToolResultChars = 8000` before feeding back to the model; the UI still
-    gets a short preview).
+  - success → emit `tool_result{completed, preview, output}`, return `toolResult`
+    block with the result passed through `capResult` (truncated to
+    `maxToolResultChars = 8000` before feeding back to the model). The UI gets a
+    280-rune `preview` plus the full `output` capped at
+    `maxUIOutputChars = 20000` (`capUIOutput`), rendered as collapsible JSON.
 
 ## helpers.go
 
@@ -93,6 +95,9 @@ stop reason.
 - `toolInputDocument(raw)` — builds a Bedrock document from the raw JSON string reassembled from streamed tool_use input deltas (empty object on parse failure).
 - `preview(s)` — truncates to 280 runes with an ellipsis (used for `tool_result.preview`).
 - `serverOf(name)` — splits a namespaced tool name on the first `__`.
+
+`capUIOutput(s)` (agent.go) truncates the full result to `maxUIOutputChars = 20000`
+for `tool_result.output` — render-only, looser than the 8000-char model cap.
 
 ## Current state / gaps
 
