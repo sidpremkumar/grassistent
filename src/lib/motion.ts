@@ -68,12 +68,12 @@ export const backdropVariants: Variants = {
   exit: { opacity: 0, transition: { duration: 0.15 } },
 };
 
-/** Top-bar trigger icon: settles in, with a lift on hover and a press response. */
+/** Top-bar trigger icon: settles in, spring scale on hover, press response. */
 export const triggerVariants: Variants = {
-  hidden: { opacity: 0, scale: 0.7 },
-  visible: { opacity: 1, scale: 1, y: 0, transition: spring },
-  hover: { y: -1, scale: 1.06, transition: springFast },
-  tap: { y: 0, scale: 0.92, transition: springFast },
+  hidden: { opacity: 0, scale: 0.75 },
+  visible: { opacity: 1, scale: 1, transition: spring },
+  hover: { scale: 1.05, transition: springFast },
+  tap: { scale: 0.92, transition: springFast },
 };
 
 /** Chat popover rises from the button anchor (bottom-right origin). */
