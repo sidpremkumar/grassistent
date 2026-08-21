@@ -52,7 +52,11 @@ export async function executeBrowserTool(args: {
       : Boolean(tool.requiresConfirmation);
     if (needsConfirmation) {
       const description = tool.describeAction?.({ input: args.input }) ?? `Run ${args.name}`;
-      const approved = await args.ctx.confirm({ description });
+      const approved = await args.ctx.confirm({
+        description,
+        toolName: args.name,
+        input: args.input,
+      });
       if (!approved) {
         return { content: 'The user declined this action.', isError: true };
       }

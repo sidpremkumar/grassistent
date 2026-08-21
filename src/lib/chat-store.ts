@@ -95,6 +95,68 @@ export function saveCustomContext(value: string): void {
   }
 }
 
+const AUTO_ALLOW_KEY = 'mcpagent.autoAllow.v1';
+
+/** Tool names the user chose to always allow, keyed by chat session id. */
+type AutoAllowStore = Record<string, string[]>;
+
+function loadAutoAllowStore(): AutoAllowStore {
+  if (typeof localStorage === 'undefined') {
+    return {};
+  }
+  try {
+    const raw = localStorage.getItem(AUTO_ALLOW_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as AutoAllowStore;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAutoAllowStore(store: AutoAllowStore): void {
+  if (typeof localStorage === 'undefined') {
+    return;
+  }
+  try {
+    localStorage.setItem(AUTO_ALLOW_KEY, JSON.stringify(store));
+  } catch {
+    /* quota exceeded or unavailable; approvals just fall back to asking */
+  }
+}
+
+/**
+ * Tools the user has blanket-approved *for this chat only*. Deliberately scoped
+ * per session so a standing approval in one investigation never silently
+ * carries into an unrelated thread.
+ */
+export function loadAutoAllow(args: { sessionId: string }): string[] {
+  return loadAutoAllowStore()[args.sessionId] ?? [];
+}
+
+/** Remembers "always allow" for one tool within one chat. */
+export function addAutoAllow(args: { sessionId: string; toolName: string }): void {
+  const store = loadAutoAllowStore();
+  const current = store[args.sessionId] ?? [];
+  if (current.includes(args.toolName)) {
+    return;
+  }
+  saveAutoAllowStore({ ...store, [args.sessionId]: [...current, args.toolName] });
+}
+
+/** Drops a chat's standing approvals, e.g. when the conversation is deleted. */
+export function clearAutoAllow(args: { sessionId: string }): void {
+  const store = loadAutoAllowStore();
+  if (!(args.sessionId in store)) {
+    return;
+  }
+  const next: AutoAllowStore = { ...store };
+  delete next[args.sessionId];
+  saveAutoAllowStore(next);
+}
+
 export function genSessionId(): string {  return `sess-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 }
 

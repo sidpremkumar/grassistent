@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AgentEvent, BrowserToolResult, ChatRequest, PageContext } from '../lib/protocol';
 import { streamChat } from '../lib/chat-stream';
 import { browserToolSpecs, executeBrowserTool } from '../lib/browser-tools/registry';
 import { extractPageContext } from '../lib/page-context';
+import { addAutoAllow, loadAutoAllow } from '../lib/chat-store';
 
 /**
  * A single item in the rendered conversation. Tool calls are tracked inline so
@@ -38,7 +39,14 @@ export type ChatMessage = {
  */
 export type PendingInteraction =
   | { kind: 'question'; prompt: string; options?: string[] }
-  | { kind: 'confirm'; description: string };
+  | {
+      kind: 'confirm';
+      description: string;
+      /** Tool being gated, used both for display and per-chat "always allow". */
+      toolName: string;
+      /** Raw arguments, rendered as pretty-printed JSON in the prompt. */
+      input: Record<string, unknown>;
+    };
 
 let idCounter = 0;
 const nextId = (): string => `${Date.now()}-${idCounter++}`;
@@ -59,8 +67,16 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
   const [interaction, setInteraction] = useState<PendingInteraction | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const interactionResolveRef = useRef<((answer: string) => void) | null>(null);
-  /** "Always allow" toggle for confirmations, scoped to this hook instance. */
-  const autoAllowRef = useRef(false);
+  /**
+   * Tools the user chose "always allow" for. Scoped to this chat session and
+   * persisted, so the standing approval survives a reload but never leaks into
+   * another conversation.
+   */
+  const autoAllowRef = useRef<Set<string>>(new Set(loadAutoAllow({ sessionId })));
+
+  useEffect(() => {
+    autoAllowRef.current = new Set(loadAutoAllow({ sessionId }));
+  }, [sessionId]);
 
   /** Resolve the pending question/confirmation with the user's answer. */
   const respond = useCallback((answer: string) => {
@@ -71,9 +87,12 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
   }, []);
 
   const allowAlways = useCallback(() => {
-    autoAllowRef.current = true;
+    if (interaction?.kind === 'confirm') {
+      autoAllowRef.current.add(interaction.toolName);
+      addAutoAllow({ sessionId, toolName: interaction.toolName });
+    }
     respond('yes');
-  }, [respond]);
+  }, [interaction, respond, sessionId]);
 
   const send = useCallback(
     async (text: string, pageContext?: PageContext) => {
@@ -124,13 +143,22 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
           setInteraction({ kind: 'question', prompt: args.prompt, options: args.options });
         });
 
-      const confirm = async (args: { description: string }): Promise<boolean> => {
-        if (autoAllowRef.current) {
+      const confirm = async (args: {
+        description: string;
+        toolName: string;
+        input: Record<string, unknown>;
+      }): Promise<boolean> => {
+        if (autoAllowRef.current.has(args.toolName)) {
           return true;
         }
         const answer = await new Promise<string>((resolve) => {
           interactionResolveRef.current = resolve;
-          setInteraction({ kind: 'confirm', description: args.description });
+          setInteraction({
+            kind: 'confirm',
+            description: args.description,
+            toolName: args.toolName,
+            input: args.input,
+          });
         });
         return answer === 'yes';
       };

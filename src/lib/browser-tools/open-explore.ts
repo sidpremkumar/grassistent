@@ -78,11 +78,8 @@ export const openExploreTool: BrowserTool = {
   requiresConfirmation: true,
   describeAction(args: { input: Record<string, unknown> }) {
     const ds = asString(args.input.datasourceUid) ?? '?';
-    const queries = Array.isArray(args.input.queries) ? args.input.queries : [];
-    const first = queries[0];
-    const preview =
-      typeof first === 'string' ? first : first ? JSON.stringify(first).slice(0, 120) : '';
-    return `Open Explore against ${ds} with: ${preview}${queries.length > 1 ? ` (+${queries.length - 1} more)` : ''}`;
+    const n = Array.isArray(args.input.queries) ? args.input.queries.length : 0;
+    return `Open Explore against ${ds} with ${n} quer${n === 1 ? 'y' : 'ies'}`;
   },
   async execute(args: { input: Record<string, unknown> }) {
     const datasourceUid = asString(args.input.datasourceUid);

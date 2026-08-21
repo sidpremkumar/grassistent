@@ -101,11 +101,10 @@ export const updateExploreQueryTool: BrowserTool = {
       return `Switch the Explore datasource to ${ds}`;
     }
     if (Array.isArray(args.input.queries)) {
-      const first = args.input.queries[0];
-      const preview = typeof first === 'string' ? first : JSON.stringify(first ?? {}).slice(0, 120);
-      return `Replace the Explore queries with: ${preview}`;
+      const n = args.input.queries.length;
+      return `Replace the Explore ${n === 1 ? 'query' : `queries (${n})`}`;
     }
-    return `Update the Explore query with: ${JSON.stringify(args.input.patch ?? {}).slice(0, 160)}`;
+    return 'Update the Explore query';
   },
   async execute(args: { input: Record<string, unknown> }) {
     const panes = readPanes();

@@ -19,8 +19,17 @@ export type BrowserToolOutcome = {
 export type BrowserToolContext = {
   /** Ask the user a question; resolves with the chosen option or typed text. */
   promptUser(args: { prompt: string; options?: string[] }): Promise<string>;
-  /** Ask the user to approve a mutating action; resolves false on deny. */
-  confirm(args: { description: string }): Promise<boolean>;
+  /**
+   * Ask the user to approve a mutating action; resolves false on deny. The tool
+   * name and raw input are passed through so the chat panel can render the
+   * exact arguments (pretty-printed JSON) alongside the human description, and
+   * so "always allow" can be remembered per tool for this chat only.
+   */
+  confirm(args: {
+    description: string;
+    toolName: string;
+    input: Record<string, unknown>;
+  }): Promise<boolean>;
 };
 
 export type BrowserTool = {
