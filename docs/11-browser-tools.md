@@ -40,7 +40,7 @@ Tier 1 = officially supported URL-state APIs. Tier 2 = semi-private Scenes surfa
 
 ## Confirmation gate
 
-Tools with `requiresConfirmation: true` (currently `update_panel_query`) render an inline Allow / Always allow / Deny chip (`ChatPanel.tsx`, `styles.interaction`) before executing. "Always allow" is scoped to the hook instance (`autoAllowRef`). A denial returns an error tool result ("The user declined this action.") so the model adapts rather than retrying.
+Tools with `requiresConfirmation: true` (currently `update_panel_query`) render an inline Allow / Always allow / Deny chip (`ChatPanel.tsx`, `styles.interaction`) before executing. "Always allow" is a blanket approval for all mutating tools, scoped to the chat session and persisted in localStorage (`chat-store.ts` autoAllow). A denial returns an error tool result ("The user declined this action.") so the model adapts rather than retrying.
 
 ## Interaction plumbing
 

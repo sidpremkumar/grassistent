@@ -22,8 +22,8 @@ export type BrowserToolContext = {
   /**
    * Ask the user to approve a mutating action; resolves false on deny. The tool
    * name and raw input are passed through so the chat panel can render the
-   * exact arguments (pretty-printed JSON) alongside the human description, and
-   * so "always allow" can be remembered per tool for this chat only.
+   * exact arguments (pretty-printed JSON) alongside the human description.
+   * "Always allow" grants a blanket approval for the rest of this chat only.
    */
   confirm(args: {
     description: string;

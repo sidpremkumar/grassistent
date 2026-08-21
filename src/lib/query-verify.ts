@@ -8,11 +8,20 @@ import { getBackendSrv } from '@grafana/runtime';
  * this is how the model gets to see them too.
  */
 
+type DsQueryFrame = {
+  schema?: {
+    name?: string;
+    meta?: { preferredVisualisationType?: string };
+    fields?: Array<{ name?: string; type?: string }>;
+  };
+  data?: { values?: unknown[][] };
+};
+
 type DsQueryResult = {
   results?: Record<
     string,
     {
-      frames?: Array<{ data?: { values?: unknown[][] } }>;
+      frames?: DsQueryFrame[];
       error?: string;
       status?: number;
     }
@@ -39,6 +48,27 @@ function toEpochRange(args: { from: string; to: string }): { from: string; to: s
   }
 }
 
+/**
+ * Best-effort description of what a result frame will render as, so the model
+ * can tell a traces TABLE apart from a TIME SERIES graph. A valid-but-wrong
+ * query (e.g. a Tempo search when the user asked for a graph) returns frames
+ * without errors — the shape is the only signal that the intent was missed.
+ */
+function describeFrameShape(frame: DsQueryFrame): string | undefined {
+  const preferred = frame.schema?.meta?.preferredVisualisationType;
+  if (preferred) {
+    return preferred;
+  }
+  const fields = frame.schema?.fields ?? [];
+  if (fields.some((f) => f.name === 'traceID' || f.name === 'traceId')) {
+    return 'traces';
+  }
+  if (fields[0]?.type === 'time' && fields.some((f) => f.type === 'number')) {
+    return 'time series';
+  }
+  return undefined;
+}
+
 function summarizeResults(results: DsQueryResult['results']): string {
   if (!results) {
     return 'no results returned';
@@ -51,7 +81,11 @@ function summarizeResults(results: DsQueryResult['results']): string {
     }
     const frames = r.frames ?? [];
     const rows = frames.reduce((acc, f) => acc + (f.data?.values?.[0]?.length ?? 0), 0);
-    parts.push(`${refId}: ${frames.length} frame${frames.length === 1 ? '' : 's'}, ~${rows} rows`);
+    const shapes = Array.from(
+      new Set(frames.map((f) => describeFrameShape(f)).filter((s): s is string => Boolean(s))),
+    );
+    const shape = shapes.length > 0 ? ` [${shapes.join(', ')}]` : '';
+    parts.push(`${refId}: ${frames.length} frame${frames.length === 1 ? '' : 's'}${shape}, ~${rows} rows`);
   }
   return parts.join('; ');
 }

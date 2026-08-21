@@ -3,8 +3,7 @@ import { AgentEvent, BrowserToolResult, ChatRequest, PageContext } from '../lib/
 import { streamChat } from '../lib/chat-stream';
 import { browserToolSpecs, executeBrowserTool } from '../lib/browser-tools/registry';
 import { extractPageContext } from '../lib/page-context';
-import { addAutoAllow, loadAutoAllow } from '../lib/chat-store';
-
+import { loadAutoAllow, setAutoAllow } from '../lib/chat-store';
 /**
  * A single item in the rendered conversation. Tool calls are tracked inline so
  * the UI can show a live "thinking" trace beneath the assistant's answer.
@@ -42,7 +41,7 @@ export type PendingInteraction =
   | {
       kind: 'confirm';
       description: string;
-      /** Tool being gated, used both for display and per-chat "always allow". */
+      /** Tool being gated, shown as the label on the rendered arguments. */
       toolName: string;
       /** Raw arguments, rendered as pretty-printed JSON in the prompt. */
       input: Record<string, unknown>;
@@ -68,14 +67,16 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
   const abortRef = useRef<AbortController | null>(null);
   const interactionResolveRef = useRef<((answer: string) => void) | null>(null);
   /**
-   * Tools the user chose "always allow" for. Scoped to this chat session and
+   * Blanket "always allow" for confirmations. Scoped to this chat session and
    * persisted, so the standing approval survives a reload but never leaks into
-   * another conversation.
+   * another conversation. One click approves ALL later mutating tool calls in
+   * this chat — per-tool scoping felt broken because every different UI action
+   * asked again.
    */
-  const autoAllowRef = useRef<Set<string>>(new Set(loadAutoAllow({ sessionId })));
+  const autoAllowRef = useRef<boolean>(loadAutoAllow({ sessionId }));
 
   useEffect(() => {
-    autoAllowRef.current = new Set(loadAutoAllow({ sessionId }));
+    autoAllowRef.current = loadAutoAllow({ sessionId });
   }, [sessionId]);
 
   /** Resolve the pending question/confirmation with the user's answer. */
@@ -88,8 +89,8 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
 
   const allowAlways = useCallback(() => {
     if (interaction?.kind === 'confirm') {
-      autoAllowRef.current.add(interaction.toolName);
-      addAutoAllow({ sessionId, toolName: interaction.toolName });
+      autoAllowRef.current = true;
+      setAutoAllow({ sessionId });
     }
     respond('yes');
   }, [interaction, respond, sessionId]);
@@ -148,7 +149,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         toolName: string;
         input: Record<string, unknown>;
       }): Promise<boolean> => {
-        if (autoAllowRef.current.has(args.toolName)) {
+        if (autoAllowRef.current) {
           return true;
         }
         const answer = await new Promise<string>((resolve) => {
@@ -307,14 +308,26 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         );
       };
 
-      await runStream(
-        { sessionId, message: text, history, pageContext, browserTools: browserToolSpecs() },
-        0,
-      );
-
-      patchAssistant((m) => ({ ...m, streaming: false, status: undefined }));
-      setBusy(false);
-      abortRef.current = null;
+      try {
+        await runStream(
+          { sessionId, message: text, history, pageContext, browserTools: browserToolSpecs() },
+          0,
+        );
+      } finally {
+        /* Whatever happened (done, error, abort, thrown exception), the turn is
+         * over: never leave the message flagged as streaming, or the UI shows a
+         * permanent caret and persists the stuck flag to localStorage. */
+        patchAssistant((m) => ({
+          ...m,
+          streaming: false,
+          status: undefined,
+          toolCalls: m.toolCalls.map((tc) =>
+            tc.status === 'running' ? { ...tc, status: 'error', error: 'interrupted' } : tc,
+          ),
+        }));
+        setBusy(false);
+        abortRef.current = null;
+      }
     },
     [busy, messages, sessionId],
   );
@@ -327,6 +340,21 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
     interactionResolveRef.current = null;
     setInteraction(null);
     setBusy(false);
+    /* Settle any message the aborted turn left mid-stream. */
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.streaming
+          ? {
+              ...m,
+              streaming: false,
+              status: undefined,
+              toolCalls: m.toolCalls.map((tc) =>
+                tc.status === 'running' ? { ...tc, status: 'error', error: 'cancelled' } : tc,
+              ),
+            }
+          : m,
+      ),
+    );
   }, []);
 
   const reset = useCallback(() => {

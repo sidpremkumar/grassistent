@@ -1,4 +1,4 @@
-import { ChatMessage } from '../components/use-agent-chat';
+import { ChatMessage, ChatToolCall } from '../components/use-agent-chat';
 
 /**
  * Local-storage backed persistence for chat sessions. Conversations live only
@@ -27,6 +27,24 @@ type Store = {
 
 const emptyStore = (): Store => ({ sessions: [], activeId: null });
 
+/**
+ * Persisted messages can never legitimately be mid-stream: the store is
+ * written on every stream chunk, so a turn interrupted by a reload, drawer
+ * close, or crash leaves `streaming: true` frozen in localStorage. Rendering
+ * that would show a permanent blinking caret on old messages, so settle
+ * everything on load: finish the message and mark still-"running" tool calls
+ * as errored (they will never complete).
+ */
+function settleMessage(message: ChatMessage): ChatMessage {
+  if (!message.streaming && message.toolCalls.every((tc) => tc.status !== 'running')) {
+    return message;
+  }
+  const toolCalls: ChatToolCall[] = message.toolCalls.map((tc) =>
+    tc.status === 'running' ? { ...tc, status: 'error', error: 'interrupted' } : tc,
+  );
+  return { ...message, streaming: false, status: undefined, toolCalls };
+}
+
 /** Reads and validates the persisted store, tolerating corruption. */
 export function loadStore(): Store {
   if (typeof localStorage === 'undefined') {
@@ -41,7 +59,13 @@ export function loadStore(): Store {
     if (!parsed || !Array.isArray(parsed.sessions)) {
       return emptyStore();
     }
-    return parsed;
+    return {
+      activeId: parsed.activeId,
+      sessions: parsed.sessions.map((s) => ({
+        ...s,
+        messages: Array.isArray(s.messages) ? s.messages.map(settleMessage) : [],
+      })),
+    };
   } catch {
     return emptyStore();
   }
@@ -95,10 +119,15 @@ export function saveCustomContext(value: string): void {
   }
 }
 
-const AUTO_ALLOW_KEY = 'mcpagent.autoAllow.v1';
+const AUTO_ALLOW_KEY = 'mcpagent.autoAllow.v2';
 
-/** Tool names the user chose to always allow, keyed by chat session id. */
-type AutoAllowStore = Record<string, string[]>;
+/**
+ * Chats where the user granted a blanket "always allow" for mutating tools.
+ * One click covers every subsequent confirmation in that conversation — the
+ * approval is for "let the agent drive this chat", not for one tool name
+ * (which felt broken: each different UI action would ask again).
+ */
+type AutoAllowStore = Record<string, true>;
 
 function loadAutoAllowStore(): AutoAllowStore {
   if (typeof localStorage === 'undefined') {
@@ -128,22 +157,21 @@ function saveAutoAllowStore(store: AutoAllowStore): void {
 }
 
 /**
- * Tools the user has blanket-approved *for this chat only*. Deliberately scoped
- * per session so a standing approval in one investigation never silently
- * carries into an unrelated thread.
+ * Whether the user blanket-approved mutating tools *for this chat only*.
+ * Deliberately scoped per session so a standing approval in one investigation
+ * never silently carries into an unrelated thread.
  */
-export function loadAutoAllow(args: { sessionId: string }): string[] {
-  return loadAutoAllowStore()[args.sessionId] ?? [];
+export function loadAutoAllow(args: { sessionId: string }): boolean {
+  return loadAutoAllowStore()[args.sessionId] === true;
 }
 
-/** Remembers "always allow" for one tool within one chat. */
-export function addAutoAllow(args: { sessionId: string; toolName: string }): void {
+/** Remembers "always allow" for the rest of one chat. */
+export function setAutoAllow(args: { sessionId: string }): void {
   const store = loadAutoAllowStore();
-  const current = store[args.sessionId] ?? [];
-  if (current.includes(args.toolName)) {
+  if (store[args.sessionId]) {
     return;
   }
-  saveAutoAllowStore({ ...store, [args.sessionId]: [...current, args.toolName] });
+  saveAutoAllowStore({ ...store, [args.sessionId]: true });
 }
 
 /** Drops a chat's standing approvals, e.g. when the conversation is deleted. */

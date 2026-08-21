@@ -82,16 +82,36 @@ export function FloatingChat() {
     };
   }, [open, reduceMotion]);
 
-  /* Inject a trigger button into the top bar. Grafana re-renders the chrome on
-   * navigation, so a MutationObserver keeps the button present. */
+  /**
+   * Inject a trigger button into the top bar. Grafana re-renders the chrome on
+   * navigation, so a MutationObserver keeps the button present.
+   *
+   * Two hazards here both lock up the tab, and both are guarded below:
+   *
+   *  1. Self-observation. Our own DOM writes are seen by the observer, and
+   *     `innerHTML` is NOT round-trip stable: the parser re-serializes
+   *     `<path … />` as `<path …></path>`, so a naive "rewrite when it differs"
+   *     check never converges — write → mutation → still differs → write …
+   *     forever, in a microtask loop that starves rendering. We therefore
+   *     compare a `data-icon-key` marker (what we last applied) instead of the
+   *     serialized markup, and detach the observer around our own writes.
+   *
+   *  2. Callback cost. Dashboards, Explore, and log views mutate <body>
+   *     thousands of times a second (panel renders, log rows, tooltips), so the
+   *     callback must be cheap: work is coalesced to at most one run per frame,
+   *     and the common case exits after a single `getElementById`.
+   */
   useEffect(() => {
     const BTN_ID = 'mcpagent-topbar-trigger';
 
     /* Custom icon (if configured + safe) renders as an <img>; otherwise the
      * built-in inline SVG glyph. */
-    const innerHTML = isSafeIconSrc(branding.icon)
-      ? `<img src="${escapeAttr(branding.icon)}" alt="" width="18" height="18" style="display:block;object-fit:contain;border-radius:4px" />`
+    const customIcon = isSafeIconSrc(branding.icon) ? branding.icon : undefined;
+    const innerHTML = customIcon
+      ? `<img src="${escapeAttr(customIcon)}" alt="" width="18" height="18" style="display:block;object-fit:contain;border-radius:4px" />`
       : triggerInnerHTML;
+    /* Stable identity of the rendered content, safe to compare across reads. */
+    const iconKey = customIcon ?? 'builtin';
 
     /* Finds the top-bar search control; the button is inserted just before it so
      * it sits in the same right-aligned cluster as Search / Sign in. Grafana's
@@ -103,21 +123,53 @@ export function FloatingChat() {
       document.querySelector('input[placeholder^="Search"]') ??
       document.querySelector('[placeholder^="Search"]');
 
+    let disposed = false;
+    let frame = 0;
+    const observer = new MutationObserver(() => schedule());
+
+    const observe = () => {
+      if (!disposed) {
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+    };
+
+    /** Runs our own DOM writes with the observer detached. */
+    const writeDom = (mutate: () => void) => {
+      observer.disconnect();
+      try {
+        mutate();
+      } finally {
+        observe();
+      }
+    };
+
+    /* Never re-render for an unchanged value: this runs on DOM churn. */
+    const setPresent = (present: boolean) => {
+      setInjected((prev) => (prev === present ? prev : present));
+    };
+
     const tryInject = () => {
+      if (disposed) {
+        return;
+      }
       const existing = document.getElementById(BTN_ID);
       if (existing) {
         /* Keep the icon in sync if branding loaded after the button mounted. */
-        if (existing.innerHTML !== innerHTML) {
-          existing.innerHTML = innerHTML;
+        if (existing.dataset.iconKey !== iconKey) {
+          writeDom(() => {
+            existing.dataset.iconKey = iconKey;
+            existing.innerHTML = innerHTML;
+          });
         }
-        setInjected(true);
+        setPresent(true);
         return;
       }
       const search = findSearch();
       /* The search control's parent is the flex cell in the top-bar cluster. */
       const cell = search?.parentElement ?? null;
-      if (!search || !cell || !cell.parentElement) {
-        setInjected(false);
+      const cluster = cell?.parentElement ?? null;
+      if (!cell || !cluster) {
+        setPresent(false);
         return;
       }
       const btn = document.createElement('button');
@@ -126,17 +178,34 @@ export function FloatingChat() {
       btn.setAttribute('aria-label', 'Open MCP Agent');
       btn.title = 'MCP Agent';
       btn.className = mcpTriggerClass;
+      btn.dataset.iconKey = iconKey;
       btn.innerHTML = innerHTML;
       btn.addEventListener('click', () => window.dispatchEvent(new CustomEvent(TOGGLE_EVENT)));
       /* Insert immediately before the search cluster. */
-      cell.parentElement.insertBefore(btn, cell);
-      setInjected(true);
+      writeDom(() => cluster.insertBefore(btn, cell));
+      setPresent(true);
+    };
+
+    /** Coalesces a burst of mutations into a single check per frame. */
+    const schedule = () => {
+      if (frame !== 0 || disposed) {
+        return;
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        tryInject();
+      });
     };
 
     tryInject();
-    const observer = new MutationObserver(() => tryInject());
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    observe();
+    return () => {
+      disposed = true;
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+      observer.disconnect();
+    };
   }, [branding.icon]);
 
   return (

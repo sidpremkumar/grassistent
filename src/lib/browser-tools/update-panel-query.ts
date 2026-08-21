@@ -1,89 +1,14 @@
 import { BrowserTool, asNumber, asString } from './types';
+import { awaitRunnerVerdict, findPanel, findQueryRunner, sceneRoot } from '../scene-graph';
 
 /**
  * Tier-2 (best-effort) tool: edits a panel's queries *in place* on the live
  * Scenes dashboard — no save, no reload; the panel re-runs immediately.
  *
- * Grafana 13 exposes the active scene root at `window.__grafanaSceneContext`.
- * That is a semi-private surface, so everything here is structural typing +
- * guards: if the scene graph is missing or its shape drifts, we return a clean
- * error and the model falls back to open_explore / open_panel_editor guidance.
+ * After the re-run we wait for the panel's actual PanelData to settle and
+ * return the real verdict (datasource error message, or series/row counts) so
+ * the model can see a wrong change and retry, instead of assuming success.
  */
-
-/** Structural view of a scene object: state bag + optional mutators. */
-type SceneObjectLike = {
-  state: Record<string, unknown>;
-  setState?: (partial: Record<string, unknown>) => void;
-  runQueries?: () => void;
-};
-
-function isSceneObject(value: unknown): value is SceneObjectLike {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { state?: unknown }).state === 'object' &&
-    (value as { state?: unknown }).state !== null
-  );
-}
-
-/** Depth-first walk over the scene graph collecting nodes matching `match`. */
-function findSceneObjects(args: {
-  root: SceneObjectLike;
-  match: (node: SceneObjectLike) => boolean;
-}): SceneObjectLike[] {
-  const found: SceneObjectLike[] = [];
-  const visited = new Set<SceneObjectLike>();
-  const stack: SceneObjectLike[] = [args.root];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (!node || visited.has(node)) {
-      continue;
-    }
-    visited.add(node);
-    if (args.match(node)) {
-      found.push(node);
-    }
-    for (const value of Object.values(node.state)) {
-      if (isSceneObject(value)) {
-        stack.push(value);
-      } else if (Array.isArray(value)) {
-        for (const item of value) {
-          if (isSceneObject(item)) {
-            stack.push(item);
-          }
-        }
-      }
-    }
-  }
-  return found;
-}
-
-/** A VizPanel node is identified by key "panel-<id>" plus a pluginId. */
-function findPanel(args: { root: SceneObjectLike; panelId: number }): SceneObjectLike | undefined {
-  const keyPattern = new RegExp(`^panel-${args.panelId}(?:$|-)`);
-  return findSceneObjects({
-    root: args.root,
-    match: (node) =>
-      typeof node.state.key === 'string' &&
-      keyPattern.test(node.state.key) &&
-      typeof node.state.pluginId === 'string',
-  })[0];
-}
-
-/**
- * Follows the panel's $data chain (transformers wrap the runner) to the
- * SceneQueryRunner: the node owning a `queries` array and `runQueries()`.
- */
-function findQueryRunner(args: { panel: SceneObjectLike }): SceneObjectLike | undefined {
-  let node: unknown = args.panel.state.$data;
-  for (let depth = 0; depth < 5 && isSceneObject(node); depth++) {
-    if (Array.isArray(node.state.queries) && typeof node.runQueries === 'function') {
-      return node;
-    }
-    node = node.state.$data;
-  }
-  return undefined;
-}
 
 export const updatePanelQueryTool: BrowserTool = {
   spec: {
@@ -92,6 +17,8 @@ export const updatePanelQueryTool: BrowserTool = {
       'Edit the queries of a panel on the dashboard the user is viewing, live and in place (unsaved). ' +
       'Either pass "queries" (full replacement array of datasource query objects, keeping refIds) or ' +
       '"refId" + "expr" to rewrite one query expression. Current queries are in the page context. ' +
+      'The result includes the panel\'s real query outcome (error message, or series/row counts) — ' +
+      'if it reports an ERROR or unexpected empty data, fix the query and retry. ' +
       'If this fails, fall back to open_explore or open_panel_editor.',
     inputSchema: {
       type: 'object',
@@ -121,8 +48,8 @@ export const updatePanelQueryTool: BrowserTool = {
       return { content: '"panelId" (number) is required', isError: true };
     }
 
-    const root: unknown = (window as unknown as { __grafanaSceneContext?: unknown }).__grafanaSceneContext;
-    if (!isSceneObject(root)) {
+    const root = sceneRoot();
+    if (!root) {
       return {
         content: 'live scene graph is not available on this page (not a Scenes dashboard?); use open_explore or open_panel_editor instead',
         isError: true,
@@ -187,10 +114,19 @@ export const updatePanelQueryTool: BrowserTool = {
       return { content: 'pass either "queries" or "refId"+"expr"', isError: true };
     }
 
+    const previousData = runner.state.data;
     runner.setState({ queries: next });
     runner.runQueries?.();
+
+    /* Feedback loop: report what the panel ACTUALLY shows after the re-run.
+     * A datasource error here means the edit was wrong — the model must fix
+     * and retry rather than claim success. */
+    const verdict = await awaitRunnerVerdict({ runner, previousData });
     return {
-      content: `Panel ${panelId} queries updated in place (unsaved) and re-run: ${JSON.stringify(next).slice(0, 500)}`,
+      content:
+        `Panel ${panelId} queries updated in place (unsaved) and re-run: ${JSON.stringify(next).slice(0, 500)}. ` +
+        verdict.summary,
+      isError: !verdict.ok,
     };
   },
 };

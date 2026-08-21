@@ -137,23 +137,40 @@ export function ChatPanel({ onClose }: Props) {
     [customContext],
   );
 
-  const refreshContext = useCallback(() => {
-    void extractPageContext().then((ctx) => {
-      setPageContext(ctx);
-    });
+  /* Signature of the last context we published. Extraction walks the scene
+   * graph and hits the dashboard API, and its result feeds an effect that asks
+   * the backend for suggestions — so publishing an identical-but-new object
+   * would cost a model call for nothing. Explore rewrites the URL on almost
+   * every interaction, which makes that churn constant. */
+  const contextSigRef = useRef<string>('');
+
+  const publishContext = useCallback((ctx: PageContext) => {
+    const signature = JSON.stringify(ctx);
+    if (signature === contextSigRef.current) {
+      return;
+    }
+    contextSigRef.current = signature;
+    setPageContext(ctx);
   }, []);
+
+  const refreshContext = useCallback(() => {
+    void extractPageContext().then(publishContext);
+  }, [publishContext]);
 
   /* Extract context on mount, retry briefly (Scenes dashboards hydrate async so
    * the first extraction after login/navigation often sees nothing), and
-   * re-extract on every URL change so the panel tracks the page being viewed. */
+   * re-extract on every URL change so the panel tracks the page being viewed.
+   * URL changes are debounced: Explore pushes a new URL for every query, pane,
+   * and time-range tweak, and each extraction is comparatively expensive. */
   useEffect(() => {
     let cancelled = false;
+    let debounce = 0;
     const attempt = (retriesLeft: number) => {
       void extractPageContext().then((ctx) => {
         if (cancelled) {
           return;
         }
-        setPageContext(ctx);
+        publishContext(ctx);
         if (!hasPageContext(ctx) && retriesLeft > 0) {
           window.setTimeout(() => attempt(retriesLeft - 1), 700);
         }
@@ -162,15 +179,18 @@ export function ChatPanel({ onClose }: Props) {
     attempt(3);
 
     const sub = locationService.getHistory().listen(() => {
-      if (!cancelled) {
-        refreshContext();
+      if (cancelled) {
+        return;
       }
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(refreshContext, 400);
     });
     return () => {
       cancelled = true;
+      window.clearTimeout(debounce);
       sub();
     };
-  }, [refreshContext]);
+  }, [publishContext, refreshContext]);
 
   /* If there is no session yet, create one lazily so history always has a home. */
   useEffect(() => {
@@ -185,21 +205,35 @@ export function ChatPanel({ onClose }: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  /* Persist the active conversation whenever messages settle. */
+  /* Mirror the streamed conversation into the session list. Kept as a pure
+   * updater — persistence is a separate, debounced effect below. */
   useEffect(() => {
     if (!activeId) {
       return;
     }
-    setSessions((prev) => {
-      const next = prev.map((s) =>
+    setSessions((prev) =>
+      prev.map((s) =>
         s.id === activeId
           ? { ...s, messages, title: deriveTitle(messages), updatedAt: Date.now() }
           : s,
-      );
-      saveStore({ sessions: next, activeId });
-      return next;
-    });
+      ),
+    );
   }, [messages, activeId]);
+
+  /* Persist to localStorage off the hot path: `messages` changes on every
+   * streamed token, and each save serializes the whole history (tool outputs
+   * included), which is enough synchronous work to visibly jank the page. */
+  useEffect(() => {
+    if (!activeId) {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      saveStore({ sessions, activeId });
+    }, 400);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [sessions, activeId]);
 
   /* Regenerate follow-up suggestions when the turn is idle. Debounced so a
    * rapid burst of state changes (streaming settle + context re-extract)
@@ -250,16 +284,14 @@ export function ChatPanel({ onClose }: Props) {
 
   const deleteSession = (id: string) => {
     clearAutoAllow({ sessionId: id });
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      const nextActive = id === activeId ? (next[0]?.id ?? '') : activeId;
-      saveStore({ sessions: next, activeId: nextActive });
-      if (id === activeId) {
-        setActiveId(nextActive);
-        load(next[0]?.messages ?? []);
-      }
-      return next;
-    });
+    /* Computed outside the updater: state updaters must stay pure (React can
+     * invoke them twice), and this one has to switch the active thread. */
+    const next = sessions.filter((s) => s.id !== id);
+    setSessions(next);
+    if (id === activeId) {
+      setActiveId(next[0]?.id ?? '');
+      load(next[0]?.messages ?? []);
+    }
   };
 
   const onSend = () => {
@@ -428,7 +460,7 @@ export function ChatPanel({ onClose }: Props) {
                     variant="secondary"
                     onClick={allowAlways}
                     data-testid="mcpagent-confirm-always"
-                    tooltip="Skip this prompt for this tool, in this chat only"
+                    tooltip="Skip approval prompts for the rest of this chat"
                   >
                     Always allow in this chat
                   </Button>
@@ -953,6 +985,10 @@ const getStyles = (theme: GrafanaTheme2) => ({
       padding: theme.spacing(0.125, 0.5),
       borderRadius: theme.shape.radius.default,
       background: theme.colors.background.secondary,
+      /* Grafana's global styles set `code { white-space: nowrap }`, which makes
+       * long inline snippets (e.g. TraceQL queries) overflow the panel. */
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
     },
     '& pre': {
       margin: theme.spacing(0, 0, 1),
@@ -962,7 +998,7 @@ const getStyles = (theme: GrafanaTheme2) => ({
       border: `1px solid ${theme.colors.border.weak}`,
       overflowX: 'auto',
     },
-    '& pre code': { padding: 0, background: 'transparent' },
+    '& pre code': { padding: 0, background: 'transparent', whiteSpace: 'pre' },
     '& blockquote': {
       margin: theme.spacing(0, 0, 1),
       paddingLeft: theme.spacing(1.5),

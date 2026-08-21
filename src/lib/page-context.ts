@@ -2,6 +2,7 @@ import { getBackendSrv, getTemplateSrv, locationService } from '@grafana/runtime
 import { PageContext } from './protocol';
 import { describeDatasourceInfo, describeDatasourceUid, listDatasources, resolveDatasource } from './datasources';
 import { recentAlerts } from './error-log';
+import { collectPanelErrors } from './scene-graph';
 
 /**
  * Extracts context about the Grafana page the user is currently viewing so the
@@ -266,7 +267,10 @@ export async function extractPageContext(): Promise<PageContext> {
 
   const variables = readVariables();
   const datasources = listDatasources({});
-  const recentErrors = recentAlerts();
+  /* Toast errors + live panel query errors: panel failures never surface as
+   * toasts, so without the scene scan the agent cannot see that a variable /
+   * time / query change it just made broke a panel. */
+  const recentErrors = [...recentAlerts(), ...collectPanelErrors()];
 
   const parts: string[] = [];
   if (dash.dashboardTitle) {
