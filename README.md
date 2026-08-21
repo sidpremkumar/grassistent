@@ -1,4 +1,6 @@
-# Grafana MCP Agent
+# grassistent
+
+📊 Grafana + 🤖 assistant
 
 An open-source Grafana **app plugin** that adds an AI chat agent to Grafana. The agent connects to any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server(s) you configure and can call their tools to investigate. It **knows the page you're viewing** — the dashboard, panel query, time range, or alert — and **suggests real follow-up questions** generated from your actual conversation, that page, and any guidance you've given it.
 
