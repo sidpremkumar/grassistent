@@ -65,19 +65,32 @@ export function toolCallDumpJson(args: { tool: ChatToolCall }): string {
 }
 
 /**
- * The whole assistant turn as pretty-printed JSON: what the model said, what it
- * was thinking, every tool call with its arguments and result, and the page
- * context the frontend had at the time.
+ * The whole assistant turn as pretty-printed JSON: the prompt that caused it,
+ * what the model said, what it was thinking, every tool call with its arguments
+ * and result, and the page context the frontend had at the time.
  */
-export function turnDumpJson(args: { message: ChatMessage; pageContext?: PageContext }): string {
-  const { message, pageContext } = args;
+export function turnDumpJson(args: {
+  message: ChatMessage;
+  pageContext?: PageContext;
+  /** The user message this turn is answering, so the dump stands alone. */
+  prompt?: string;
+}): string {
+  const { message, pageContext, prompt } = args;
   return JSON.stringify(
     {
       capturedAt: new Date().toISOString(),
+      prompt,
       role: message.role,
       streaming: message.streaming,
       answer: message.content,
       reasoning: message.reasoning || undefined,
+      /* Order matters when diagnosing a turn: which narration preceded which
+       * tool call is often the whole story. */
+      timeline: message.timeline.map((entry) =>
+        entry.kind === 'tool'
+          ? { kind: entry.kind, tool: message.toolCalls.find((tc) => tc.id === entry.id)?.name }
+          : { kind: entry.kind, text: entry.text },
+      ),
       toolCalls: message.toolCalls.map((tool) => toolCallDump({ tool })),
       failedToolCalls: message.toolCalls.filter((tc) => tc.status === 'error').map((tc) => tc.name),
       pageContext,

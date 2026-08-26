@@ -1,42 +1,50 @@
 import { useEffect, useMemo, useState } from 'react';
 import { css, keyframes } from '@emotion/css';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { GrafanaTheme2 } from '@grafana/data';
+import { GrafanaTheme2, renderMarkdown } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { ChatToolCall } from './use-agent-chat';
 import { JsonBlock } from './JsonBlock';
 import { CopyButton } from './CopyButton';
 import { toolCallDumpJson } from '../lib/debug-dump';
+import { ChatTimelineEntry } from '../lib/chat-timeline';
 
 /**
  * ThinkingBlock renders a Linear/Cursor-style collapsible "thinking" section:
  * a compact header that shimmers while the agent works, and an expandable body
- * that streams the model's reasoning and a live timeline of tool calls and
- * their results.
+ * that replays the turn in the order it happened.
+ *
+ * The body walks a timeline rather than rendering "all reasoning, then all tool
+ * calls": a turn that went narration -> tool -> narration -> tool used to
+ * display with its steps bunched at the top and its narration merged into the
+ * final answer, which misrepresents how the agent actually worked.
  *
  * While streaming it auto-expands; once the final answer arrives it collapses
  * to a quiet one-line summary the user can re-open.
  */
 
 type Props = {
-  reasoning: string;
+  /**
+   * The turn's trace, in order — everything except the final answer, which the
+   * caller renders outside this block.
+   */
+  trace: ChatTimelineEntry[];
+  /** Tool calls, looked up by the timeline's `tool` entries. */
   toolCalls: ChatToolCall[];
   streaming: boolean;
   /** True once visible answer content has begun streaming. */
   hasAnswer: boolean;
-  /**
-   * Serializes the whole turn for the clipboard. Provided by the caller (which
-   * owns the message and the page context) and called only on click, since the
-   * dump includes every tool result in the turn.
-   */
-  dumpJson?: () => string;
 };
 
-export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer, dumpJson }: Props) {
+export function ThinkingBlock({ trace, toolCalls, streaming, hasAnswer }: Props) {
   const styles = useStyles2(getStyles);
   const reduceMotion = useReducedMotion();
 
   const failed = useMemo(() => toolCalls.filter((tc) => tc.status === 'error'), [toolCalls]);
+  const byId = useMemo(
+    () => new Map(toolCalls.map((tc) => [tc.id, tc])),
+    [toolCalls],
+  );
 
   /* Auto-expand while thinking, auto-collapse once the answer starts — EXCEPT
    * when a step failed. Collapsing a failure hides it behind a confident answer
@@ -69,7 +77,7 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer, dump
 
   const active = streaming && !hasAnswer;
 
-  if (!reasoning && toolCalls.length === 0 && !active) {
+  if (trace.length === 0 && !active) {
     return null;
   }
 
@@ -77,42 +85,28 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer, dump
 
   return (
     <div className={styles.root} data-testid="mcpagent-thinking">
-      <div className={styles.headerRow}>
-        <button
-          type="button"
-          className={styles.header}
-          onClick={() => setManual(!open)}
-          aria-expanded={open}
-          data-testid="mcpagent-thinking-toggle"
+      <button
+        type="button"
+        className={styles.header}
+        onClick={() => setManual(!open)}
+        aria-expanded={open}
+        data-testid="mcpagent-thinking-toggle"
+      >
+        <motion.span
+          className={styles.chevron}
+          animate={{ rotate: open ? 90 : 0 }}
+          transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
         >
-          <motion.span
-            className={styles.chevron}
-            animate={{ rotate: open ? 90 : 0 }}
-            transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
-          >
-            <Icon name="angle-right" size="sm" />
-          </motion.span>
-          {failed.length > 0 && !active && (
-            <span className={styles.headerWarnIcon} data-testid="mcpagent-thinking-failed-icon">
-              <Icon name="exclamation-triangle" size="sm" />
-            </span>
-          )}
-          <span className={summaryClass}>{summary}</span>
-          {active && <PulseDot />}
-        </button>
-        {/* The whole turn — answer, reasoning, every tool call's arguments and
-          * result, and the page context — as one JSON blob. This is the thing
-          * you want when the agent called a tool that does not exist and you
-          * need to show someone exactly what it sent. */}
-        {dumpJson && !active && (
-          <CopyButton
-            getText={dumpJson}
-            label="Copy JSON"
-            title="Copy this turn (tool calls, inputs, outputs, page context) as JSON"
-            testId="mcpagent-thinking-copy-turn"
-          />
+          <Icon name="angle-right" size="sm" />
+        </motion.span>
+        {failed.length > 0 && !active && (
+          <span className={styles.headerWarnIcon} data-testid="mcpagent-thinking-failed-icon">
+            <Icon name="exclamation-triangle" size="sm" />
+          </span>
         )}
-      </div>
+        <span className={summaryClass}>{summary}</span>
+        {active && <PulseDot />}
+      </button>
 
       {/* A failed action is not something the user should have to expand a
         * collapsed trace to discover, especially since the model's prose often
@@ -138,12 +132,40 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer, dump
           >
             <div className={styles.body}>
               <div className={styles.rail} />
-              <div className={styles.timeline}>
-                {reasoning && <div className={styles.reasoning}>{reasoning}</div>}
+              <div className={styles.timeline} data-testid="mcpagent-thinking-timeline">
                 <AnimatePresence initial={false}>
-                  {toolCalls.map((tc) => (
-                    <ToolStep key={tc.id} tool={tc} styles={styles} reduceMotion={Boolean(reduceMotion)} />
-                  ))}
+                  {trace.map((entry) => {
+                    if (entry.kind === 'tool') {
+                      const tool = byId.get(entry.id);
+                      return tool ? (
+                        <ToolStep
+                          key={entry.id}
+                          tool={tool}
+                          styles={styles}
+                          reduceMotion={Boolean(reduceMotion)}
+                        />
+                      ) : null;
+                    }
+                    if (!entry.text.trim()) {
+                      return null;
+                    }
+                    /* Interleaved narration ("let me check the label values
+                     * first"). Rendered as markdown like the final answer, since
+                     * the model writes the same way in both places. */
+                    return (
+                      <div
+                        key={entry.id}
+                        className={entry.kind === 'reasoning' ? styles.reasoning : styles.narration}
+                        data-testid={`mcpagent-thinking-${entry.kind}`}
+                      >
+                        {entry.kind === 'reasoning' ? (
+                          entry.text
+                        ) : (
+                          <span dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.text) }} />
+                        )}
+                      </div>
+                    );
+                  })}
                 </AnimatePresence>
               </div>
             </div>
@@ -273,20 +295,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
   root: css({
     marginBottom: theme.spacing(1),
   }),
-  /* The toggle and the copy control are siblings: a copy button nested inside
-   * the header button would be invalid HTML and would toggle the section. */
-  headerRow: css({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    minWidth: 0,
-  }),
   header: css({
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(0.75),
-    flex: 1,
-    minWidth: 0,
+    width: '100%',
     background: 'none',
     border: 'none',
     padding: theme.spacing(0.25, 0),
@@ -360,6 +373,39 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontSize: theme.typography.bodySmall.fontSize,
     lineHeight: theme.typography.bodySmall.lineHeight,
     whiteSpace: 'pre-wrap',
+  }),
+  /* Interleaved prose the model streamed between tool calls. Slightly stronger
+   * than `reasoning` — it is real narration the user was meant to read — but
+   * still visibly subordinate to the final answer. */
+  narration: css({
+    marginLeft: theme.spacing(3),
+    color: theme.colors.text.secondary,
+    fontSize: theme.typography.bodySmall.fontSize,
+    lineHeight: theme.typography.bodySmall.lineHeight,
+    overflowWrap: 'anywhere',
+    '& > *:first-child': { marginTop: 0 },
+    '& > *:last-child': { marginBottom: 0 },
+    '& p': { margin: theme.spacing(0, 0, 0.5) },
+    '& ul, & ol': { margin: theme.spacing(0, 0, 0.5), paddingLeft: theme.spacing(2.5) },
+    '& code': {
+      fontFamily: theme.typography.fontFamilyMonospace,
+      fontSize: '0.9em',
+      padding: theme.spacing(0.125, 0.5),
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.canvas,
+      /* Grafana's global `code { white-space: nowrap }` overflows the panel. */
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
+    },
+    '& pre': {
+      margin: theme.spacing(0, 0, 0.5),
+      padding: theme.spacing(0.75),
+      borderRadius: theme.shape.radius.default,
+      background: theme.colors.background.canvas,
+      border: `1px solid ${theme.colors.border.weak}`,
+      overflowX: 'auto',
+    },
+    '& pre code': { padding: 0, background: 'transparent', whiteSpace: 'pre' },
   }),
   step: css({
     position: 'relative',

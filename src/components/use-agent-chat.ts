@@ -4,6 +4,12 @@ import { streamChat } from '../lib/chat-stream';
 import { browserToolSpecs, executeBrowserTool } from '../lib/browser-tools/registry';
 import { extractPageContext } from '../lib/page-context';
 import { loadAutoAllow, setAutoAllow } from '../lib/chat-store';
+import {
+  ChatTimelineEntry,
+  appendStreamedText,
+  appendToolEntry,
+  replaceTrailingText,
+} from '../lib/chat-timeline';
 /**
  * A single item in the rendered conversation. Tool calls are tracked inline so
  * the UI can show a live "thinking" trace beneath the assistant's answer.
@@ -28,6 +34,12 @@ export type ChatMessage = {
   /** Streamed model reasoning shown inside the collapsible thinking block. */
   reasoning: string;
   toolCalls: ChatToolCall[];
+  /**
+   * Prose, reasoning, and tool calls in the order they actually happened.
+   * `content` and `reasoning` remain the flat concatenations of the same
+   * stream — they feed the backend transcript, the chat title, and copy.
+   */
+  timeline: ChatTimelineEntry[];
   status?: string;
   streaming: boolean;
 };
@@ -55,6 +67,29 @@ const MAX_CONTINUATIONS = 12;
 
 /** Per-tool-error length cap in the replayed transcript, to bound prompt size. */
 const HISTORY_ERROR_MAX = 400;
+
+/**
+ * Appends a UI-authored note (a backend error, an aborted-turn explanation) to
+ * both the flat `content` and the timeline.
+ *
+ * These have to stay in lockstep: `content` is what the next turn's transcript
+ * and "copy answer" see, while the timeline is what actually renders. Writing to
+ * only one of them is how a note becomes invisible or, worse, invisible on
+ * screen but present in the model's history.
+ */
+function withNote(args: { message: ChatMessage; note: string }): ChatMessage {
+  const { message, note } = args;
+  const separator = message.content ? '\n\n' : '';
+  return {
+    ...message,
+    content: `${message.content}${separator}${note}`,
+    timeline: appendStreamedText({
+      timeline: message.timeline,
+      kind: 'text',
+      text: `${separator}${note}`,
+    }),
+  };
+}
 
 /**
  * Renders a message for the backend transcript, appending a note for any tool
@@ -143,6 +178,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         content: text,
         reasoning: '',
         toolCalls: [],
+        timeline: [],
         streaming: false,
       };
       const assistantMsg: ChatMessage = {
@@ -151,6 +187,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         content: '',
         reasoning: '',
         toolCalls: [],
+        timeline: [],
         streaming: true,
       };
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -208,10 +245,22 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         const onEvent = (event: AgentEvent) => {
           switch (event.type) {
             case 'content':
-              patchAssistant((m) => ({ ...m, content: m.content + event.text }));
+              patchAssistant((m) => ({
+                ...m,
+                content: m.content + event.text,
+                timeline: appendStreamedText({ timeline: m.timeline, kind: 'text', text: event.text }),
+              }));
               break;
             case 'reasoning':
-              patchAssistant((m) => ({ ...m, reasoning: m.reasoning + event.text }));
+              patchAssistant((m) => ({
+                ...m,
+                reasoning: m.reasoning + event.text,
+                timeline: appendStreamedText({
+                  timeline: m.timeline,
+                  kind: 'reasoning',
+                  text: event.text,
+                }),
+              }));
               break;
             case 'status':
               patchAssistant((m) => ({ ...m, status: event.text }));
@@ -223,6 +272,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
                   ...m.toolCalls,
                   { id: event.id, server: event.server, name: event.name, input: event.input, status: 'running' },
                 ],
+                timeline: appendToolEntry({ timeline: m.timeline, toolCallId: event.id }),
               }));
               break;
             case 'tool_result':
@@ -245,6 +295,7 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
                   ...m.toolCalls,
                   { id: event.id, server: 'browser', name: event.name, input: event.input, status: 'running' },
                 ],
+                timeline: appendToolEntry({ timeline: m.timeline, toolCallId: event.id }),
               }));
               break;
             }
@@ -254,7 +305,18 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
             case 'done':
               patchAssistant((m) => ({
                 ...m,
-                content: event.content || m.content,
+                /* A `done` payload is a whole-answer replacement, so the
+                 * timeline's trailing prose has to be replaced too, not appended
+                 * to — otherwise the answer renders twice. */
+                ...(event.content && event.content !== m.content
+                  ? {
+                      content: event.content,
+                      timeline: replaceTrailingText({
+                        timeline: m.timeline,
+                        text: event.content,
+                      }),
+                    }
+                  : {}),
                 streaming: false,
                 status: undefined,
               }));
@@ -263,12 +325,12 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
               /* Never discard a backend error just because prose already
                * streamed: `m.content || ...` used to drop it entirely, which is
                * how a confident answer survived a failed turn. */
-              patchAssistant((m) => ({
-                ...m,
-                content: m.content ? `${m.content}\n\n_Error: ${event.error}_` : `Error: ${event.error}`,
-                streaming: false,
-                status: undefined,
-              }));
+              patchAssistant((m) =>
+                withNote({
+                  message: { ...m, streaming: false, status: undefined },
+                  note: m.content ? `_Error: ${event.error}_` : `Error: ${event.error}`,
+                }),
+              );
               break;
             default:
               break;
@@ -285,24 +347,24 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
 
         if (streamFailed || !continuation || pendingCalls.length === 0 || controller.signal.aborted) {
           if (streamFailed) {
-            patchAssistant((m) => ({
-              ...m,
-              content: m.content
-                ? `${m.content}\n\n_Error: agent backend stream failed_`
-                : 'Error: agent backend stream failed',
-              streaming: false,
-              status: undefined,
-            }));
+            patchAssistant((m) =>
+              withNote({
+                message: { ...m, streaming: false, status: undefined },
+                note: m.content ? '_Error: agent backend stream failed_' : 'Error: agent backend stream failed',
+              }),
+            );
           } else if (!continuation && pendingCalls.length > 0 && !controller.signal.aborted) {
             /* The turn asked for page actions but we never received the resume
              * token, so NONE of them ran. Silently returning here made the
              * assistant's "I've updated the panel" the only thing on screen. */
-            patchAssistant((m) => ({
-              ...m,
-              content: `${m.content}\n\n_The page actions above were not performed (the agent stream ended without a resume token), so nothing on the page changed. Please retry._`,
-              streaming: false,
-              status: undefined,
-            }));
+            patchAssistant((m) =>
+              withNote({
+                message: { ...m, streaming: false, status: undefined },
+                note:
+                  '_The page actions above were not performed (the agent stream ended without a ' +
+                  'resume token), so nothing on the page changed. Please retry._',
+              }),
+            );
           }
           return;
         }
@@ -311,16 +373,16 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
           /* Same class of problem as the backend's tool-step budget: a bare
            * "(stopped)" told the user nothing about what did or did not happen
            * to their page. Name the cap, and say what state things are in. */
-          patchAssistant((m) => ({
-            ...m,
-            content:
-              `${m.content}\n\n_I stopped here: this turn used all ${MAX_CONTINUATIONS} rounds of ` +
-              `page actions I'm allowed, so I couldn't finish. The steps above did run, so the page ` +
-              `reflects them — but treat anything I claimed beyond that as unverified. Ask again to ` +
-              `continue from the current state._`,
-            streaming: false,
-            status: undefined,
-          }));
+          patchAssistant((m) =>
+            withNote({
+              message: { ...m, streaming: false, status: undefined },
+              note:
+                `_I stopped here: this turn used all ${MAX_CONTINUATIONS} rounds of page actions ` +
+                `I'm allowed, so I couldn't finish. The steps above did run, so the page reflects ` +
+                `them — but treat anything I claimed beyond that as unverified. Ask again to ` +
+                `continue from the current state._`,
+            }),
+          );
           return;
         }
 

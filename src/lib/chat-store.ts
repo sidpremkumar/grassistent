@@ -1,4 +1,5 @@
 import { ChatMessage, ChatToolCall } from '../components/use-agent-chat';
+import { legacyTimeline } from './chat-timeline';
 
 /**
  * Local-storage backed persistence for chat sessions. Conversations live only
@@ -34,15 +35,31 @@ const emptyStore = (): Store => ({ sessions: [], activeId: null });
  * that would show a permanent blinking caret on old messages, so settle
  * everything on load: finish the message and mark still-"running" tool calls
  * as errored (they will never complete).
+ *
+ * This is also where messages written before the timeline existed are migrated,
+ * so old threads keep rendering instead of collapsing to a bare answer.
  */
 function settleMessage(message: ChatMessage): ChatMessage {
-  if (!message.streaming && message.toolCalls.every((tc) => tc.status !== 'running')) {
+  const timeline =
+    message.timeline && message.timeline.length > 0
+      ? message.timeline
+      : legacyTimeline({
+          reasoning: message.reasoning ?? '',
+          content: message.content ?? '',
+          toolCallIds: (message.toolCalls ?? []).map((tc) => tc.id),
+        });
+
+  if (
+    !message.streaming &&
+    (message.toolCalls ?? []).every((tc) => tc.status !== 'running') &&
+    timeline === message.timeline
+  ) {
     return message;
   }
-  const toolCalls: ChatToolCall[] = message.toolCalls.map((tc) =>
+  const toolCalls: ChatToolCall[] = (message.toolCalls ?? []).map((tc) =>
     tc.status === 'running' ? { ...tc, status: 'error', error: 'interrupted' } : tc,
   );
-  return { ...message, streaming: false, status: undefined, toolCalls };
+  return { ...message, streaming: false, status: undefined, toolCalls, timeline };
 }
 
 /** Reads and validates the persisted store, tolerating corruption. */

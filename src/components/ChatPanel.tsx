@@ -11,6 +11,7 @@ import { fetchSuggestions } from '../lib/chat-stream';
 import { contextVariants, messageVariants } from '../lib/motion';
 import { ThinkingBlock } from './ThinkingBlock';
 import { JsonBlock } from './JsonBlock';
+import { CopyButton } from './CopyButton';
 import { Branding, isSafeIconSrc, loadBranding } from '../lib/branding';
 import {
   ChatSession,
@@ -22,6 +23,7 @@ import {
 } from '../lib/chat-store';
 import { useCustomContext } from '../lib/use-custom-context';
 import { turnDumpJson } from '../lib/debug-dump';
+import { splitTimeline } from '../lib/chat-timeline';
 
 /**
  * ChatPanel is the reusable chat surface used inside the slide-in drawer. It:
@@ -414,10 +416,12 @@ export function ChatPanel({ onClose }: Props) {
           </motion.div>
         )}
         <AnimatePresence initial={false}>
-          {messages.map((m) => (
+          {messages.map((m, i) => (
             <MessageBubble
               key={m.id}
               message={m}
+              /* The turn's prompt, so a copied debug dump stands alone. */
+              prompt={i > 0 && messages[i - 1].role === 'user' ? messages[i - 1].content : undefined}
               pageContext={pageContext}
               styles={styles}
               initial={initial}
@@ -616,11 +620,13 @@ export function ChatPanel({ onClose }: Props) {
 
 function MessageBubble({
   message,
+  prompt,
   pageContext,
   styles,
   initial,
 }: {
   message: ChatMessage;
+  prompt?: string;
   pageContext: PageContext;
   styles: ReturnType<typeof getStyles>;
   initial: 'hidden' | false;
@@ -643,7 +649,8 @@ function MessageBubble({
     );
   }
 
-  const hasAnswer = message.content.trim().length > 0;
+  const { trace, answer } = splitTimeline({ timeline: message.timeline });
+  const hasAnswer = answer.trim().length > 0;
   /* No `layout` here: animating height while tokens stream causes the bubble to
    * "squish"/reflow on every chunk. The stream itself provides the typewriter
    * effect; we just append a blinking caret while it's live. */
@@ -657,19 +664,38 @@ function MessageBubble({
     >
       <div className={styles.assistant}>
         <ThinkingBlock
-          reasoning={message.reasoning}
+          trace={trace}
           toolCalls={message.toolCalls}
           streaming={message.streaming}
           hasAnswer={hasAnswer}
-          dumpJson={() => turnDumpJson({ message, pageContext })}
         />
         {hasAnswer && (
           <div className={styles.answer}>
             <span
               className={styles.markdown}
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(answer) }}
             />
             {message.streaming && <span className={styles.caret} />}
+          </div>
+        )}
+        {/* Debug affordance for EVERY finished assistant turn, including ones
+          * with no tool calls at all — it used to live in the thinking block,
+          * which renders nothing when there is no trace, so exactly the turns
+          * that look wrong for no visible reason had no way to be copied. */}
+        {!message.streaming && (
+          <div className={styles.messageActions}>
+            <CopyButton
+              getText={() => message.content}
+              label="Copy"
+              title="Copy this answer as text"
+              testId="mcpagent-message-copy-text"
+            />
+            <CopyButton
+              getText={() => turnDumpJson({ message, pageContext, prompt })}
+              label="Copy debug JSON"
+              title="Copy this turn (answer, reasoning, tool calls, inputs, outputs, page context) as JSON"
+              testId="mcpagent-message-copy-debug"
+            />
           </div>
         )}
       </div>
@@ -964,6 +990,18 @@ const getStyles = (theme: GrafanaTheme2) => ({
   }),
   content: css({ lineHeight: theme.typography.body.lineHeight }),
   assistant: css({ width: '100%', maxWidth: '100%' }),
+  /* Quiet until the message is hovered/focused, but never fully hidden: this is
+   * the debug entry point, so it has to be discoverable without hovering. */
+  messageActions: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    marginTop: theme.spacing(0.5),
+    opacity: 0.45,
+    transition: 'opacity 120ms ease',
+    '&:hover, &:focus-within': { opacity: 1 },
+    [`@media (hover: none)`]: { opacity: 1 },
+  }),
   answer: css({
     lineHeight: theme.typography.body.lineHeight,
     wordBreak: 'break-word',
