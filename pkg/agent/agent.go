@@ -436,6 +436,58 @@ func (a *Agent) loop(
 		})
 	}
 
+	/* Budget exhausted. Returning here used to emit a bare "done", which left
+	 * the user with whatever prose happened to have streamed in the last
+	 * iteration — usually nothing, since an iteration that ends in tool calls
+	 * has no closing text. So the panel just went quiet mid-investigation with
+	 * no hint that anything had gone wrong. */
+	return a.explainExhaustedBudget(ctx, messages, system, emit)
+}
+
+// budgetExhaustedInstruction asks for a closing message instead of silence. It
+// is deliberately explicit that the tool phase is OVER: given the chance, the
+// model will otherwise announce another tool call it can no longer make.
+const budgetExhaustedInstruction = `[system] You have used all %d tool steps allowed for this turn, so the tool phase is now over. You CANNOT call any more tools, and no further tool results will arrive.
+
+Write your closing message to the user now, in 2-4 sentences, plain prose:
+1. What you were trying to do.
+2. What you actually established (be concrete — name the queries that ran and what they returned). If a step failed, say so.
+3. What is still unknown, and the single most useful next step. If that next step is simply "ask me again", say that.
+
+Do not claim any page change or finding you did not verify. Do not promise to continue — this turn is finished.`
+
+// exhaustedFallbackText is used when the wrap-up call itself cannot produce
+// text. It must never be empty: an empty assistant bubble is the exact failure
+// this whole path exists to remove.
+const exhaustedFallbackText = "I ran out of tool steps for this turn before I could finish, so this answer is incomplete — the steps above show how far I got. Ask again (ideally narrowing the question) and I will pick it up from there."
+
+// explainExhaustedBudget spends one final, tool-free model call turning an
+// abrupt stop into an explanation the user can act on. Tools are withheld
+// rather than merely discouraged, so the model has no way to spend another
+// step and must answer in prose.
+func (a *Agent) explainExhaustedBudget(
+	ctx context.Context,
+	messages []brtypes.Message,
+	system []brtypes.SystemContentBlock,
+	emit EmitFunc,
+) error {
+	backend.Logger.Warn("agent tool budget exhausted; asking the model to summarize instead of stopping",
+		"maxToolIterations", a.maxIterations)
+	emit(Event{Type: "status", Text: "Out of tool steps — summarizing what I found…"})
+
+	prompted := appendUserText(messages, fmt.Sprintf(budgetExhaustedInstruction, a.maxIterations))
+	assistant, _, _, err := a.streamTurn(ctx, prompted, system, nil, emit)
+	if err != nil {
+		/* The turn is already over; a hard error here would replace the partial
+		 * findings with a stack-trace-ish message, so degrade to fixed text. */
+		backend.Logger.Warn("wrap-up call after exhausted tool budget failed", "error", err)
+		emit(Event{Type: "content", Text: "\n\n" + exhaustedFallbackText})
+		emit(Event{Type: "done"})
+		return nil
+	}
+	if !hasText(assistant) {
+		emit(Event{Type: "content", Text: "\n\n" + exhaustedFallbackText})
+	}
 	emit(Event{Type: "done"})
 	return nil
 }

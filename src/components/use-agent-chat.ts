@@ -308,9 +308,16 @@ export function useAgentChat(sessionId: string, initialMessages: ChatMessage[] =
         }
 
         if (depth >= MAX_CONTINUATIONS) {
+          /* Same class of problem as the backend's tool-step budget: a bare
+           * "(stopped)" told the user nothing about what did or did not happen
+           * to their page. Name the cap, and say what state things are in. */
           patchAssistant((m) => ({
             ...m,
-            content: `${m.content}\n\n_(stopped: too many browser tool rounds)_`,
+            content:
+              `${m.content}\n\n_I stopped here: this turn used all ${MAX_CONTINUATIONS} rounds of ` +
+              `page actions I'm allowed, so I couldn't finish. The steps above did run, so the page ` +
+              `reflects them — but treat anything I claimed beyond that as unverified. Ask again to ` +
+              `continue from the current state._`,
             streaming: false,
             status: undefined,
           }));

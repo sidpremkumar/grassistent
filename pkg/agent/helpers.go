@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	brdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -47,6 +48,36 @@ func toolResultBlock(toolUseID, text string, isError bool) brtypes.ContentBlock 
 			},
 		},
 	}
+}
+
+// appendUserText adds a user-role text message without mutating the caller's
+// slice. Bedrock rejects two consecutive messages with the same role, so when
+// the conversation already ends on a user message the text is folded into it.
+func appendUserText(messages []brtypes.Message, text string) []brtypes.Message {
+	out := make([]brtypes.Message, len(messages))
+	copy(out, messages)
+
+	if n := len(out); n > 0 && out[n-1].Role == brtypes.ConversationRoleUser {
+		content := make([]brtypes.ContentBlock, len(out[n-1].Content), len(out[n-1].Content)+1)
+		copy(content, out[n-1].Content)
+		out[n-1].Content = append(content, &brtypes.ContentBlockMemberText{Value: text})
+		return out
+	}
+	return append(out, brtypes.Message{
+		Role:    brtypes.ConversationRoleUser,
+		Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: text}},
+	})
+}
+
+// hasText reports whether a message carries any non-blank text block, i.e.
+// whether the user actually saw prose stream from it.
+func hasText(m brtypes.Message) bool {
+	for _, block := range m.Content {
+		if t, ok := block.(*brtypes.ContentBlockMemberText); ok && strings.TrimSpace(t.Value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // toJSONDocument converts a JSON-shaped map into a Bedrock document for tool schemas.
