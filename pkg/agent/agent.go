@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 
 	"github.com/grafana-mcp-agent/mcpagent/pkg/mcp"
 )
@@ -100,6 +101,11 @@ func New(brc *bedrockruntime.Client, modelID, systemPrompt string, maxIterations
 // withServerContext appends operator-provided per-server usage notes to the
 // system prompt so users can steer how the agent queries each MCP server
 // (e.g. which labels/services to use for "backend api logs").
+//
+// Operator notes are frequently copied from docs written for a different agent
+// with a different tool namespace, so they name tools that do not exist here.
+// The header below tells the model to treat the notes as domain knowledge and
+// the tool list as the only source of callable names.
 func withServerContext(systemPrompt string, servers []ServerBinding) string {
 	var notes []string
 	for _, s := range servers {
@@ -113,7 +119,12 @@ func withServerContext(systemPrompt string, servers []ServerBinding) string {
 		return systemPrompt
 	}
 	return systemPrompt +
-		"\n\nOperator notes per MCP server (follow these when choosing and calling that server's tools):\n" +
+		"\n\nOperator notes per MCP server (follow these when choosing and calling that server's tools).\n" +
+		"IMPORTANT — these notes are DOMAIN knowledge (which service, label, metric, datasource uid to " +
+		"use), not a tool catalogue. Your tool list is the ONLY source of callable tool names: call every " +
+		"tool by its exact advertised \"<server>__<tool>\" name. If a note references a tool name that is " +
+		"not in your tool list, find the tool in your list that does the same job and use its real name; " +
+		"never invent a name by combining a note's naming style with a server prefix.\n\n" +
 		strings.Join(notes, "\n\n")
 }
 
@@ -140,8 +151,12 @@ func allowSet(names []string) map[string]bool {
 // Browser tools are appended after the MaxTools cap so advertising many MCP
 // tools can never silently drop the frontend's capabilities.
 func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec) ([]brtypes.Tool, map[string]toolBinding, error) {
-	var tools []brtypes.Tool
 	bindings := map[string]toolBinding{}
+
+	/* Grouped per server rather than one flat slice so the MaxTools cap can be
+	 * shared fairly: a flat truncation is first-server-wins, which silently
+	 * hides EVERY tool of every later server once the first one is large. */
+	perServer := make([][]brtypes.Tool, 0, len(a.servers))
 
 	for _, server := range a.servers {
 		client := server.Client
@@ -153,11 +168,20 @@ func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec
 			return nil, nil, fmt.Errorf("list tools %q: %w", client.Name(), err)
 		}
 		allowed := allowSet(server.AllowedTools)
+		var advertised []brtypes.Tool
 		for _, t := range mcpTools {
 			if allowed != nil && !allowed[t.Name] {
 				continue
 			}
 			full := namespaced(client.Name(), t.Name)
+			/* Bedrock rejects the ENTIRE Converse request when any tool spec
+			 * name is malformed or over 64 chars, so one bad name from one
+			 * server would break every turn. Drop it instead. */
+			if !validToolName(full) {
+				backend.Logger.Warn("skipping MCP tool with a name Bedrock cannot accept",
+					"server", client.Name(), "tool", t.Name, "namespaced", full)
+				continue
+			}
 			var schema map[string]any
 			if len(t.InputSchema) > 0 {
 				_ = json.Unmarshal(t.InputSchema, &schema)
@@ -171,7 +195,7 @@ func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec
 				/* Bedrock requires a non-empty tool description. */
 				description = t.Name
 			}
-			tools = append(tools, &brtypes.ToolMemberToolSpec{
+			advertised = append(advertised, &brtypes.ToolMemberToolSpec{
 				Value: brtypes.ToolSpecification{
 					Name:        aws.String(full),
 					Description: aws.String(description),
@@ -180,10 +204,12 @@ func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec
 			})
 			bindings[full] = toolBinding{client: client, realName: t.Name}
 		}
+		backend.Logger.Debug("advertising MCP tools",
+			"server", client.Name(), "advertised", len(advertised), "offered", len(mcpTools))
+		perServer = append(perServer, advertised)
 	}
-	if a.maxTools > 0 && len(tools) > a.maxTools {
-		tools = tools[:a.maxTools]
-	}
+
+	tools := capTools(perServer, a.maxTools)
 
 	for _, bt := range browserTools {
 		schema := bt.InputSchema
@@ -203,6 +229,46 @@ func (a *Agent) collectTools(ctx context.Context, browserTools []BrowserToolSpec
 		})
 	}
 	return tools, bindings, nil
+}
+
+// capTools flattens per-server tool lists under a global cap, taking one tool
+// from each server per pass so every configured server keeps representation.
+// A dropped tool is invisible to the model but still named in operator context
+// and docs, which is a direct cause of "unknown tool" loops — so any drop is
+// logged loudly with the count.
+func capTools(perServer [][]brtypes.Tool, maxTools int) []brtypes.Tool {
+	total := 0
+	longest := 0
+	for _, group := range perServer {
+		total += len(group)
+		if len(group) > longest {
+			longest = len(group)
+		}
+	}
+	if maxTools <= 0 || total <= maxTools {
+		flat := make([]brtypes.Tool, 0, total)
+		for _, group := range perServer {
+			flat = append(flat, group...)
+		}
+		return flat
+	}
+
+	backend.Logger.Warn(
+		"MCP tool count exceeds maxTools; some tools will NOT be advertised to the model "+
+			"(it may then call names it has read in operator context but cannot dispatch) — "+
+			"raise maxTools or narrow each server's allowlist",
+		"total", total, "maxTools", maxTools, "dropped", total-maxTools)
+
+	flat := make([]brtypes.Tool, 0, maxTools)
+	for i := 0; i < longest && len(flat) < maxTools; i++ {
+		for _, group := range perServer {
+			if i >= len(group) || len(flat) == maxTools {
+				continue
+			}
+			flat = append(flat, group[i])
+		}
+	}
+	return flat
 }
 
 // Run executes the agent loop for a single user turn, emitting events as it goes.
@@ -284,6 +350,16 @@ func (a *Agent) loop(
 		}
 	}
 
+	/* The flat name list backs the "did you mean" hint on an unknown tool. It
+	 * covers browser tools too, so a mis-namespaced page action is recoverable
+	 * the same way. */
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if spec, ok := t.(*brtypes.ToolMemberToolSpec); ok {
+			toolNames = append(toolNames, aws.ToString(spec.Value.Name))
+		}
+	}
+
 	for iter := startIter; iter < a.maxIterations; iter++ {
 		assistantMsg, toolUses, stopReason, err := a.streamTurn(ctx, messages, system, toolConfig, emit)
 		if err != nil {
@@ -312,7 +388,7 @@ func (a *Agent) loop(
 		var resultBlocks []brtypes.ContentBlock
 		var partial []serializedToolResult
 		for _, tu := range mcpUses {
-			block := a.runTool(ctx, tu, bindings, emit)
+			block := a.runTool(ctx, tu, bindings, toolNames, emit)
 			resultBlocks = append(resultBlocks, block)
 			if tr, ok := block.(*brtypes.ContentBlockMemberToolResult); ok {
 				partial = append(partial, *serializeToolResult(&tr.Value))
@@ -457,9 +533,14 @@ func (a *Agent) streamTurn(
 			if strings.TrimSpace(raw) == "" {
 				raw = "{}"
 			}
+			/* The assistant message is echoed back on the next iteration and
+			 * Bedrock validates toolUse names on INPUT too, so an illegal name
+			 * (we have seen a literal "$PARAMETER_NAME") turns a recoverable
+			 * "unknown tool" into a 400 that kills the whole turn mid-answer. */
+			name := sanitizeToolName(b.toolName)
 			tu := &brtypes.ContentBlockMemberToolUse{
 				Value: brtypes.ToolUseBlock{
-					Name:      aws.String(b.toolName),
+					Name:      aws.String(name),
 					ToolUseId: aws.String(b.toolID),
 					Input:     toolInputDocument(raw),
 				},
@@ -480,6 +561,7 @@ func (a *Agent) runTool(
 	ctx context.Context,
 	tu *brtypes.ContentBlockMemberToolUse,
 	bindings map[string]toolBinding,
+	toolNames []string,
 	emit EmitFunc,
 ) brtypes.ContentBlock {
 	name := aws.ToString(tu.Value.Name)
@@ -498,7 +580,9 @@ func (a *Agent) runTool(
 	})
 
 	if !known {
-		msg := fmt.Sprintf("unknown tool %q", name)
+		/* Hand the model the real names instead of a dead end, or it will burn
+		 * the whole iteration budget retrying variations of the same guess. */
+		msg := unknownToolMessage(name, toolNames)
 		emit(Event{Type: "tool_result", ID: toolUseID, Status: "error", Error: msg})
 		return toolResultBlock(toolUseID, msg, true)
 	}

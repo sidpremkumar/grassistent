@@ -5,6 +5,8 @@ import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
 import { ChatToolCall } from './use-agent-chat';
 import { JsonBlock } from './JsonBlock';
+import { CopyButton } from './CopyButton';
+import { toolCallDumpJson } from '../lib/debug-dump';
 
 /**
  * ThinkingBlock renders a Linear/Cursor-style collapsible "thinking" section:
@@ -22,9 +24,15 @@ type Props = {
   streaming: boolean;
   /** True once visible answer content has begun streaming. */
   hasAnswer: boolean;
+  /**
+   * Serializes the whole turn for the clipboard. Provided by the caller (which
+   * owns the message and the page context) and called only on click, since the
+   * dump includes every tool result in the turn.
+   */
+  dumpJson?: () => string;
 };
 
-export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Props) {
+export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer, dumpJson }: Props) {
   const styles = useStyles2(getStyles);
   const reduceMotion = useReducedMotion();
 
@@ -69,28 +77,42 @@ export function ThinkingBlock({ reasoning, toolCalls, streaming, hasAnswer }: Pr
 
   return (
     <div className={styles.root} data-testid="mcpagent-thinking">
-      <button
-        type="button"
-        className={styles.header}
-        onClick={() => setManual(!open)}
-        aria-expanded={open}
-        data-testid="mcpagent-thinking-toggle"
-      >
-        <motion.span
-          className={styles.chevron}
-          animate={{ rotate: open ? 90 : 0 }}
-          transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+      <div className={styles.headerRow}>
+        <button
+          type="button"
+          className={styles.header}
+          onClick={() => setManual(!open)}
+          aria-expanded={open}
+          data-testid="mcpagent-thinking-toggle"
         >
-          <Icon name="angle-right" size="sm" />
-        </motion.span>
-        {failed.length > 0 && !active && (
-          <span className={styles.headerWarnIcon} data-testid="mcpagent-thinking-failed-icon">
-            <Icon name="exclamation-triangle" size="sm" />
-          </span>
+          <motion.span
+            className={styles.chevron}
+            animate={{ rotate: open ? 90 : 0 }}
+            transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+          >
+            <Icon name="angle-right" size="sm" />
+          </motion.span>
+          {failed.length > 0 && !active && (
+            <span className={styles.headerWarnIcon} data-testid="mcpagent-thinking-failed-icon">
+              <Icon name="exclamation-triangle" size="sm" />
+            </span>
+          )}
+          <span className={summaryClass}>{summary}</span>
+          {active && <PulseDot />}
+        </button>
+        {/* The whole turn — answer, reasoning, every tool call's arguments and
+          * result, and the page context — as one JSON blob. This is the thing
+          * you want when the agent called a tool that does not exist and you
+          * need to show someone exactly what it sent. */}
+        {dumpJson && !active && (
+          <CopyButton
+            getText={dumpJson}
+            label="Copy JSON"
+            title="Copy this turn (tool calls, inputs, outputs, page context) as JSON"
+            testId="mcpagent-thinking-copy-turn"
+          />
         )}
-        <span className={summaryClass}>{summary}</span>
-        {active && <PulseDot />}
-      </button>
+      </div>
 
       {/* A failed action is not something the user should have to expand a
         * collapsed trace to discover, especially since the model's prose often
@@ -182,23 +204,30 @@ function ToolStep({
         )}
       </span>
 
-      <button
-        type="button"
-        className={styles.stepButton}
-        onClick={() => hasDetail && setOpen((o) => !o)}
-        disabled={!hasDetail}
-        data-testid="mcpagent-thinking-step"
-      >
-        <span className={styles.stepName}>
-          {tool.server && <span className={styles.stepServer}>{tool.server}</span>}
-          {tool.name.replace(`${tool.server}__`, '')}
-        </span>
-        {hasDetail && (
-          <motion.span animate={{ rotate: open ? 90 : 0 }} className={styles.stepChevron}>
-            <Icon name="angle-right" size="xs" />
-          </motion.span>
-        )}
-      </button>
+      <div className={styles.stepRow}>
+        <button
+          type="button"
+          className={styles.stepButton}
+          onClick={() => hasDetail && setOpen((o) => !o)}
+          disabled={!hasDetail}
+          data-testid="mcpagent-thinking-step"
+        >
+          <span className={styles.stepName}>
+            {tool.server && <span className={styles.stepServer}>{tool.server}</span>}
+            {tool.name.replace(`${tool.server}__`, '')}
+          </span>
+          {hasDetail && (
+            <motion.span animate={{ rotate: open ? 90 : 0 }} className={styles.stepChevron}>
+              <Icon name="angle-right" size="xs" />
+            </motion.span>
+          )}
+        </button>
+        <CopyButton
+          getText={() => toolCallDumpJson({ tool })}
+          title="Copy this tool call (name, arguments, result) as JSON"
+          testId="mcpagent-thinking-step-copy"
+        />
+      </div>
 
       <AnimatePresence initial={false}>
         {open && hasDetail && (
@@ -244,11 +273,20 @@ const getStyles = (theme: GrafanaTheme2) => ({
   root: css({
     marginBottom: theme.spacing(1),
   }),
+  /* The toggle and the copy control are siblings: a copy button nested inside
+   * the header button would be invalid HTML and would toggle the section. */
+  headerRow: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    minWidth: 0,
+  }),
   header: css({
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(0.75),
-    width: '100%',
+    flex: 1,
+    minWidth: 0,
     background: 'none',
     border: 'none',
     padding: theme.spacing(0.25, 0),
@@ -351,11 +389,18 @@ const getStyles = (theme: GrafanaTheme2) => ({
     borderColor: theme.colors.error.border,
   }),
   nodeIcon: css({ display: 'inline-flex' }),
+  stepRow: css({
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing(0.5),
+    minWidth: 0,
+  }),
   stepButton: css({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    width: '100%',
+    flex: 1,
+    minWidth: 0,
     gap: theme.spacing(0.5),
     background: 'none',
     border: 'none',
@@ -371,6 +416,8 @@ const getStyles = (theme: GrafanaTheme2) => ({
     display: 'flex',
     alignItems: 'center',
     gap: theme.spacing(0.75),
+    minWidth: 0,
+    overflowWrap: 'anywhere',
   }),
   stepServer: css({
     color: theme.colors.text.disabled,

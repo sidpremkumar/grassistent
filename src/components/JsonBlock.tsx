@@ -3,6 +3,7 @@ import { css } from '@emotion/css';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { GrafanaTheme2 } from '@grafana/data';
 import { Icon, useStyles2 } from '@grafana/ui';
+import { CopyButton } from './CopyButton';
 
 /**
  * JsonBlock renders one labeled, collapsible payload section (e.g. a tool
@@ -102,7 +103,6 @@ export function JsonBlock({ label, value, tone = 'input', defaultOpen = true }: 
   const styles = useStyles2(getStyles);
   const reduceMotion = useReducedMotion();
   const [open, setOpen] = useState(defaultOpen);
-  const [copied, setCopied] = useState(false);
 
   const { text, isJson } = useMemo(() => {
     const parsed = toJsonValue({ value });
@@ -120,17 +120,6 @@ export function JsonBlock({ label, value, tone = 'input', defaultOpen = true }: 
   if (!text.trim()) {
     return null;
   }
-
-  const copy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* clipboard unavailable; ignore */
-    }
-  };
 
   return (
     <div className={styles.root} data-testid={`mcpagent-json-${label.toLowerCase()}`}>
@@ -160,16 +149,11 @@ export function JsonBlock({ label, value, tone = 'input', defaultOpen = true }: 
           </span>
           <span className={styles.meta}>{isJson ? 'json' : 'text'}</span>
         </button>
-        <button
-          type="button"
-          className={styles.copyButton}
-          onClick={copy}
-          title="Copy to clipboard"
-          data-testid={`mcpagent-json-${label.toLowerCase()}-copy`}
-        >
-          <Icon name={copied ? 'check' : 'copy'} size="xs" />
-          <span>{copied ? 'Copied' : 'Copy'}</span>
-        </button>
+        <CopyButton
+          getText={() => text}
+          label="Copy"
+          testId={`mcpagent-json-${label.toLowerCase()}-copy`}
+        />
       </div>
 
       <AnimatePresence initial={false}>
@@ -239,22 +223,6 @@ const getStyles = (theme: GrafanaTheme2) => ({
     fontSize: '10px',
     color: theme.colors.text.disabled,
     letterSpacing: '0.04em',
-  }),
-  copyButton: css({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    background: 'none',
-    border: 'none',
-    padding: theme.spacing(0.25, 0.5),
-    borderRadius: theme.shape.radius.default,
-    cursor: 'pointer',
-    color: theme.colors.text.disabled,
-    fontSize: '10px',
-    '&:hover': {
-      color: theme.colors.text.primary,
-      background: theme.colors.action.hover,
-    },
   }),
   bodyWrap: css({ overflow: 'hidden' }),
   pre: css({

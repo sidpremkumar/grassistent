@@ -21,6 +21,7 @@ import {
   saveStore,
 } from '../lib/chat-store';
 import { useCustomContext } from '../lib/use-custom-context';
+import { turnDumpJson } from '../lib/debug-dump';
 
 /**
  * ChatPanel is the reusable chat surface used inside the slide-in drawer. It:
@@ -414,7 +415,13 @@ export function ChatPanel({ onClose }: Props) {
         )}
         <AnimatePresence initial={false}>
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} styles={styles} initial={initial} />
+            <MessageBubble
+              key={m.id}
+              message={m}
+              pageContext={pageContext}
+              styles={styles}
+              initial={initial}
+            />
           ))}
         </AnimatePresence>
       </div>
@@ -609,10 +616,12 @@ export function ChatPanel({ onClose }: Props) {
 
 function MessageBubble({
   message,
+  pageContext,
   styles,
   initial,
 }: {
   message: ChatMessage;
+  pageContext: PageContext;
   styles: ReturnType<typeof getStyles>;
   initial: 'hidden' | false;
 }) {
@@ -652,6 +661,7 @@ function MessageBubble({
           toolCalls={message.toolCalls}
           streaming={message.streaming}
           hasAnswer={hasAnswer}
+          dumpJson={() => turnDumpJson({ message, pageContext })}
         />
         {hasAnswer && (
           <div className={styles.answer}>
